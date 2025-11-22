@@ -75,6 +75,9 @@ class SubtitleExtractor:
             'skipped': 0,
             'errors': 0
         }
+        # Progress tracking
+        self.total_files = 0
+        self.current_file = 0
 
     def _normalize_languages(self, languages: List[str]) -> List[str]:
         """Normalize language codes to ISO 639-1 format."""
@@ -287,6 +290,12 @@ class SubtitleExtractor:
         if extracted_count == 0 and subtitle_tracks:
             print(f"  No new subtitles extracted")
 
+    def _print_progress(self) -> None:
+        """Print progress information."""
+        remaining = self.total_files - self.current_file
+        percentage = (self.current_file / self.total_files * 100) if self.total_files > 0 else 0
+        print(f"  Progress: {self.current_file}/{self.total_files} files completed ({percentage:.1f}%) | {remaining} remaining")
+
     def process_directory(self, directory: Path) -> None:
         """Recursively process all MKV and MP4 files in directory."""
         mkv_files = sorted(directory.rglob('*.mkv'))
@@ -297,17 +306,22 @@ class SubtitleExtractor:
             print(f"No MKV or MP4 files found in {directory}")
             return
 
+        # Set total files for progress tracking
+        self.total_files = len(video_files)
         mkv_count = len(mkv_files)
         mp4_count = len(mp4_files)
         print(f"Found {mkv_count} MKV file(s) and {mp4_count} MP4 file(s)\n")
 
         for video_file in video_files:
             try:
+                self.current_file += 1
                 self.process_video_file(video_file)
+                self._print_progress()
                 print()  # Empty line between files
             except Exception as e:
                 print(f"  Unexpected error: {e}")
                 self.stats['errors'] += 1
+                self._print_progress()
                 print()
 
     def print_summary(self) -> None:

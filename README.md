@@ -14,6 +14,7 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
   - MP4 text/mov_text → `.srt`
 - Skips files that already have extracted subtitles
 - Handles multiple subtitle tracks per language
+- **Real-time progress tracking**: Shows files completed, remaining, and percentage
 - Provides detailed progress reporting and summary
 - Robust error handling
 
@@ -176,9 +177,11 @@ Found 2 MKV file(s) and 0 MP4 file(s)
 
 Processing: /media/tv/Show/Season 1/episode01.mkv
   Extracted: episode01.en.srt
+  Progress: 1/2 files completed (50.0%) | 1 remaining
 
 Processing: /media/tv/Show/Season 1/episode02.mkv
   Skipped: episode02.en.srt already exists
+  Progress: 2/2 files completed (100.0%) | 0 remaining
 
 ==================================================
 SUMMARY
@@ -201,9 +204,11 @@ Processing: /media/movies/movie1.mp4
   Extracted: movie1.en.srt
   Extracted: movie1.es.srt
   Extracted: movie1.fr.srt
+  Progress: 1/2 files completed (50.0%) | 1 remaining
 
 Processing: /media/movies/movie2.mp4
   Skipped: No subtitles found for language(s): en, es, fr
+  Progress: 2/2 files completed (100.0%) | 0 remaining
 
 ==================================================
 SUMMARY
