@@ -1,15 +1,16 @@
-# MKV Subtitle Extractor
+# MKV/MP4 Subtitle Extractor
 
-A Python script that recursively extracts English subtitles from MKV files and saves them in the same directory as the source files.
+A Python script that recursively extracts English subtitles from MKV and MP4 files and saves them in the same directory as the source files.
 
 ## Features
 
-- Recursively processes all MKV files in a directory
-- Extracts only English subtitle tracks (language code: `eng`)
+- Recursively processes all MKV and MP4 files in a directory
+- Extracts only English subtitle tracks (language code: `eng` / `en`)
 - Automatically detects subtitle codec and uses appropriate extension:
   - SubRip/SRT → `.srt`
   - ASS/SSA → `.ass`
   - PGS/VobSub → `.sup`
+  - MP4 text/mov_text → `.srt`
 - Skips files that already have extracted subtitles
 - Handles multiple English subtitle tracks per file
 - Provides detailed progress reporting and summary
@@ -18,9 +19,12 @@ A Python script that recursively extracts English subtitles from MKV files and s
 ## Requirements
 
 - Python 3.6 or higher
-- mkvtoolnix (`mkvmerge` and `mkvextract`)
+- **For MKV files**: mkvtoolnix (`mkvmerge` and `mkvextract`)
+- **For MP4 files**: ffmpeg (`ffmpeg` and `ffprobe`)
 
-### Installing mkvtoolnix
+**Note:** You need at least one of these tools installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will only process MP4 files.
+
+### Installing mkvtoolnix (for MKV support)
 
 **Ubuntu/Debian:**
 ```bash
@@ -39,6 +43,26 @@ brew install mkvtoolnix
 
 **Windows:**
 Download from [https://mkvtoolnix.download/](https://mkvtoolnix.download/)
+
+### Installing ffmpeg (for MP4 support)
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install ffmpeg
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install ffmpeg
+```
+
+**macOS:**
+```bash
+brew install ffmpeg
+```
+
+**Windows:**
+Download from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
 
 ## Installation
 
@@ -71,14 +95,16 @@ Extracted subtitles follow this naming pattern:
 
 - Single English track: `{original_filename}.en.{extension}`
   - Example: `episode01.mkv` → `episode01.en.srt`
+  - Example: `movie.mp4` → `movie.en.srt`
 
 - Multiple English tracks: `{original_filename}.en.{track_number}.{extension}`
   - Example: `episode01.mkv` → `episode01.en.1.srt`, `episode01.en.2.srt`
+  - Example: `movie.mp4` → `movie.en.1.srt`, `movie.en.2.srt`
 
 ## Output Example
 
 ```
-Found 3 MKV file(s)
+Found 2 MKV file(s) and 2 MP4 file(s)
 
 Processing: /media/tv/Show/Season 1/episode01.mkv
   Extracted: episode01.en.srt (English)
@@ -86,14 +112,17 @@ Processing: /media/tv/Show/Season 1/episode01.mkv
 Processing: /media/tv/Show/Season 1/episode02.mkv
   Skipped: episode02.en.srt already exists
 
-Processing: /media/tv/Show/Season 1/episode03.mkv
+Processing: /media/movies/movie1.mp4
+  Extracted: movie1.en.srt
+
+Processing: /media/movies/movie2.mp4
   Skipped: No English subtitles found
 
 ==================================================
 SUMMARY
 ==================================================
-Files processed:      3
-Subtitles extracted:  1
+Files processed:      4
+Subtitles extracted:  2
 Files skipped:        2
 Errors encountered:   0
 ```
@@ -102,9 +131,10 @@ Errors encountered:   0
 
 The script handles various error scenarios:
 
-- **Missing mkvtoolnix**: Exits with installation instructions
+- **Missing both tools**: Exits with installation instructions for both mkvtoolnix and ffmpeg
+- **Missing one tool**: Shows warning and continues (only processes supported file types)
 - **Invalid directory**: Exits with error message
-- **Corrupted MKV files**: Logs error and continues with other files
+- **Corrupted video files**: Logs error and continues with other files
 - **Permission issues**: Logs error and continues with other files
 - **Missing subtitle tracks**: Skips file and continues
 
@@ -112,7 +142,7 @@ The script handles various error scenarios:
 
 ```
 positional arguments:
-  directory      Directory containing MKV files (will search recursively)
+  directory      Directory containing video files (will search recursively)
 
 optional arguments:
   -h, --help     Show help message and exit
