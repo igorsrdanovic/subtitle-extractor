@@ -4,6 +4,7 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
 
 ## Features
 
+### Core Features
 - Recursively processes all MKV and MP4 files in a directory
 - **Multi-language support**: Extract subtitles in one or more languages
 - Supports 25+ languages with automatic code normalization (ISO 639-1, ISO 639-2, or language names)
@@ -15,8 +16,17 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
 - Skips files that already have extracted subtitles
 - Handles multiple subtitle tracks per language
 - **Real-time progress tracking**: Shows files completed, remaining, and percentage
-- Provides detailed progress reporting and summary
 - Robust error handling
+
+### Advanced Features
+- **Dry-Run Mode**: Preview what would be extracted without making changes
+- **Parallel Processing**: Extract from multiple files simultaneously (multi-threading)
+- **Configuration File**: Save default settings in `.subtitle-extractor.yaml`
+- **Advanced Filtering**: Filter by forced/SDH/commentary tracks and track titles
+- **Logging & Reports**: Save detailed logs and generate JSON/CSV reports
+- **Subtitle Conversion**: Convert all subtitles to SRT or ASS format
+- **Output Directory Control**: Extract to separate directory with optional structure preservation
+- **Resume Capability**: Continue from where you left off if interrupted
 
 ## Requirements
 
@@ -114,6 +124,99 @@ python extract_subs.py /path/to/tv/shows --overwrite
 Combine language selection with overwrite:
 ```bash
 python extract_subs.py /path/to/videos --languages en fr --overwrite
+```
+
+## Advanced Usage
+
+### Dry-Run Mode
+Preview what would be extracted without making any changes:
+```bash
+python extract_subs.py /path/to/videos --dry-run
+```
+
+### Parallel Processing
+Use multiple threads for faster processing:
+```bash
+python extract_subs.py /path/to/videos --threads 4
+```
+
+### Output Directory
+Extract subtitles to a separate directory:
+```bash
+# Flat structure
+python extract_subs.py /path/to/videos --output-dir /path/to/subtitles
+
+# Preserve directory structure
+python extract_subs.py /path/to/videos --output-dir /path/to/subtitles --preserve-structure
+```
+
+### Subtitle Conversion
+Convert all extracted subtitles to SRT format:
+```bash
+python extract_subs.py /path/to/videos --convert-to srt
+```
+
+### Advanced Filtering
+```bash
+# Include forced subtitles
+python extract_subs.py /path/to/videos --include-forced
+
+# Include SDH/hearing impaired subtitles
+python extract_subs.py /path/to/videos --include-sdh
+
+# Exclude commentary tracks
+python extract_subs.py /path/to/videos --exclude-commentary
+
+# Filter by track title
+python extract_subs.py /path/to/videos --track-title "English"
+```
+
+### Logging and Reports
+```bash
+# Save log to file
+python extract_subs.py /path/to/videos --log-file extraction.log
+
+# Generate JSON report
+python extract_subs.py /path/to/videos --report-format json
+
+# Generate CSV report
+python extract_subs.py /path/to/videos --report-format csv
+```
+
+### Resume Capability
+If extraction is interrupted, resume from where you left off:
+```bash
+python extract_subs.py /path/to/videos --resume
+```
+
+### Configuration File
+Create `~/.subtitle-extractor.yaml` with default settings:
+```yaml
+languages:
+  - en
+  - es
+overwrite: false
+threads: 4
+output_dir: /path/to/subtitles
+preserve_structure: true
+```
+
+Then run without specifying options:
+```bash
+python extract_subs.py /path/to/videos
+```
+
+### Combined Example
+```bash
+python extract_subs.py /path/to/videos \
+  --languages en es fr \
+  --threads 4 \
+  --output-dir /path/to/subs \
+  --preserve-structure \
+  --convert-to srt \
+  --exclude-commentary \
+  --report-format json \
+  --resume
 ```
 
 ### Supported Languages
@@ -234,14 +337,25 @@ The script handles various error scenarios:
 
 ```
 positional arguments:
-  directory                     Directory containing video files (will search recursively)
+  directory                         Directory containing video files (will search recursively)
 
 optional arguments:
-  -h, --help                    Show help message and exit
+  -h, --help                        Show help message and exit
   -l LANG [LANG ...], --languages LANG [LANG ...]
-                                Language codes to extract (default: en)
-                                Accepts ISO 639-1 (en), ISO 639-2 (eng), or language names (english)
-  --overwrite                   Overwrite existing subtitle files
+                                    Language codes to extract (default: en)
+  --overwrite                       Overwrite existing subtitle files
+  --dry-run                         Preview without making changes
+  --threads N                       Number of parallel threads (default: 1)
+  --include-forced                  Include forced subtitles
+  --include-sdh                     Include SDH/hearing impaired subtitles
+  --exclude-commentary              Exclude commentary tracks
+  --track-title TITLE               Filter by track title (substring match)
+  --log-file FILE                   Save log to file
+  --report-format {json,csv}        Generate extraction report
+  --convert-to {srt,ass}            Convert all subtitles to format
+  --output-dir DIR                  Extract to specified directory
+  --preserve-structure              Preserve directory structure in output
+  --resume                          Resume from previous run
 ```
 
 ### Quick Reference
@@ -261,6 +375,21 @@ python extract_subs.py /path/to/videos -l en fr
 
 # With overwrite
 python extract_subs.py /path/to/videos -l en es --overwrite
+
+# Dry-run (preview)
+python extract_subs.py /path/to/videos --dry-run
+
+# Fast parallel processing
+python extract_subs.py /path/to/videos --threads 4
+
+# Extract to separate directory
+python extract_subs.py /path/to/videos --output-dir /path/to/subs
+
+# Convert all to SRT
+python extract_subs.py /path/to/videos --convert-to srt
+
+# Resume interrupted run
+python extract_subs.py /path/to/videos --resume
 ```
 
 ## License
