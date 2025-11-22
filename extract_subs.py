@@ -33,14 +33,72 @@ class SubtitleExtractor:
         'tx3g': 'srt',      # MP4 timed text
     }
 
-    def __init__(self, overwrite: bool = False):
+    # Language code normalization mapping
+    LANGUAGE_CODES = {
+        'eng': 'en', 'en': 'en', 'english': 'en',
+        'spa': 'es', 'es': 'es', 'spanish': 'es',
+        'fre': 'fr', 'fra': 'fr', 'fr': 'fr', 'french': 'fr',
+        'ger': 'de', 'deu': 'de', 'de': 'de', 'german': 'de',
+        'ita': 'it', 'it': 'it', 'italian': 'it',
+        'por': 'pt', 'pt': 'pt', 'portuguese': 'pt',
+        'rus': 'ru', 'ru': 'ru', 'russian': 'ru',
+        'jpn': 'ja', 'ja': 'ja', 'japanese': 'ja',
+        'chi': 'zh', 'zho': 'zh', 'zh': 'zh', 'chinese': 'zh',
+        'kor': 'ko', 'ko': 'ko', 'korean': 'ko',
+        'ara': 'ar', 'ar': 'ar', 'arabic': 'ar',
+        'hin': 'hi', 'hi': 'hi', 'hindi': 'hi',
+        'dut': 'nl', 'nld': 'nl', 'nl': 'nl', 'dutch': 'nl',
+        'pol': 'pl', 'pl': 'pl', 'polish': 'pl',
+        'swe': 'sv', 'sv': 'sv', 'swedish': 'sv',
+        'nor': 'no', 'no': 'no', 'norwegian': 'no',
+        'dan': 'da', 'da': 'da', 'danish': 'da',
+        'fin': 'fi', 'fi': 'fi', 'finnish': 'fi',
+        'tur': 'tr', 'tr': 'tr', 'turkish': 'tr',
+        'gre': 'el', 'ell': 'el', 'el': 'el', 'greek': 'el',
+        'heb': 'he', 'he': 'he', 'hebrew': 'he',
+        'cze': 'cs', 'ces': 'cs', 'cs': 'cs', 'czech': 'cs',
+        'hun': 'hu', 'hu': 'hu', 'hungarian': 'hu',
+        'rum': 'ro', 'ron': 'ro', 'ro': 'ro', 'romanian': 'ro',
+        'tha': 'th', 'th': 'th', 'thai': 'th',
+        'vie': 'vi', 'vi': 'vi', 'vietnamese': 'vi',
+    }
+
+    def __init__(self, overwrite: bool = False, languages: List[str] = None):
         self.overwrite = overwrite
+        # Normalize and store target languages (default to English)
+        if languages is None:
+            languages = ['en']
+        self.target_languages = self._normalize_languages(languages)
         self.stats = {
             'processed': 0,
             'extracted': 0,
             'skipped': 0,
             'errors': 0
         }
+
+    def _normalize_languages(self, languages: List[str]) -> List[str]:
+        """Normalize language codes to ISO 639-1 format."""
+        normalized = set()
+        for lang in languages:
+            lang_lower = lang.lower()
+            # Check if it's already a normalized code or can be normalized
+            if lang_lower in self.LANGUAGE_CODES:
+                normalized.add(self.LANGUAGE_CODES[lang_lower])
+            else:
+                # Keep the original if not in mapping (user-specified code)
+                normalized.add(lang_lower)
+        return sorted(list(normalized))
+
+    def _matches_language(self, lang_code: str) -> Tuple[bool, str]:
+        """Check if a language code matches any target language.
+        Returns (matches, normalized_code)."""
+        if not lang_code:
+            return False, ''
+
+        lang_lower = lang_code.lower()
+        normalized = self.LANGUAGE_CODES.get(lang_lower, lang_lower)
+
+        return normalized in self.target_languages, normalized
 
     @staticmethod
     def check_mkvtoolnix() -> bool:
@@ -67,7 +125,7 @@ class SubtitleExtractor:
             return False
 
     def get_subtitle_tracks(self, mkv_file: Path) -> List[Dict]:
-        """Extract information about English subtitle tracks from MKV file."""
+        """Extract information about subtitle tracks matching target languages from MKV file."""
         try:
             result = subprocess.run(
                 ['mkvmerge', '-J', str(mkv_file)],
@@ -77,22 +135,26 @@ class SubtitleExtractor:
             )
             data = json.loads(result.stdout)
 
-            english_subs = []
+            matching_subs = []
             for track in data.get('tracks', []):
-                if track['type'] == 'subtitles' and track.get('properties', {}).get('language') == 'eng':
-                    english_subs.append({
-                        'id': track['id'],
-                        'codec': track['codec'],
-                        'track_name': track.get('properties', {}).get('track_name', '')
-                    })
+                if track['type'] == 'subtitles':
+                    lang_code = track.get('properties', {}).get('language', '')
+                    matches, normalized = self._matches_language(lang_code)
+                    if matches:
+                        matching_subs.append({
+                            'id': track['id'],
+                            'codec': track['codec'],
+                            'track_name': track.get('properties', {}).get('track_name', ''),
+                            'language': normalized
+                        })
 
-            return english_subs
+            return matching_subs
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
             print(f"  Error reading tracks: {e}")
             return []
 
     def get_subtitle_tracks_mp4(self, mp4_file: Path) -> List[Dict]:
-        """Extract information about English subtitle tracks from MP4 file."""
+        """Extract information about subtitle tracks matching target languages from MP4 file."""
         try:
             result = subprocess.run(
                 ['ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -103,21 +165,23 @@ class SubtitleExtractor:
             )
             data = json.loads(result.stdout)
 
-            english_subs = []
+            matching_subs = []
             for stream in data.get('streams', []):
                 if stream.get('codec_type') == 'subtitle':
-                    # Check for English language
+                    # Check language from tags
                     tags = stream.get('tags', {})
-                    language = tags.get('language', tags.get('LANGUAGE', ''))
+                    lang_code = tags.get('language', tags.get('LANGUAGE', ''))
 
-                    if language.lower() in ('eng', 'en', 'english'):
-                        english_subs.append({
+                    matches, normalized = self._matches_language(lang_code)
+                    if matches:
+                        matching_subs.append({
                             'id': stream['index'],
                             'codec': stream.get('codec_name', 'unknown'),
-                            'track_name': tags.get('title', tags.get('TITLE', ''))
+                            'track_name': tags.get('title', tags.get('TITLE', '')),
+                            'language': normalized
                         })
 
-            return english_subs
+            return matching_subs
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
             print(f"  Error reading tracks: {e}")
             return []
@@ -179,36 +243,46 @@ class SubtitleExtractor:
             return
 
         if not subtitle_tracks:
-            print(f"  Skipped: No English subtitles found")
+            lang_list = ', '.join(self.target_languages)
+            print(f"  Skipped: No subtitles found for language(s): {lang_list}")
             self.stats['skipped'] += 1
             return
 
-        # Extract each English subtitle track
+        # Group tracks by language for better naming
+        tracks_by_lang = {}
+        for track in subtitle_tracks:
+            lang = track['language']
+            if lang not in tracks_by_lang:
+                tracks_by_lang[lang] = []
+            tracks_by_lang[lang].append(track)
+
+        # Extract each subtitle track
         extracted_count = 0
-        for idx, track in enumerate(subtitle_tracks):
-            # Determine extension based on codec
-            extension = self.get_extension_for_codec(track['codec'])
+        for lang, lang_tracks in sorted(tracks_by_lang.items()):
+            for idx, track in enumerate(lang_tracks):
+                # Determine extension based on codec
+                extension = self.get_extension_for_codec(track['codec'])
 
-            # Generate output filename
-            if len(subtitle_tracks) == 1:
-                output_file = video_file.parent / f"{video_file.stem}.en.{extension}"
-            else:
-                output_file = video_file.parent / f"{video_file.stem}.en.{idx + 1}.{extension}"
+                # Generate output filename with language code
+                if len(lang_tracks) == 1:
+                    output_file = video_file.parent / f"{video_file.stem}.{lang}.{extension}"
+                else:
+                    output_file = video_file.parent / f"{video_file.stem}.{lang}.{idx + 1}.{extension}"
 
-            # Check if file already exists
-            if output_file.exists() and not self.overwrite:
-                print(f"  Skipped: {output_file.name} already exists")
-                self.stats['skipped'] += 1
-                continue
+                # Check if file already exists
+                if output_file.exists() and not self.overwrite:
+                    print(f"  Skipped: {output_file.name} already exists")
+                    self.stats['skipped'] += 1
+                    continue
 
-            # Extract the subtitle
-            if extract_method(video_file, track['id'], output_file):
-                track_info = f" ({track['track_name']})" if track['track_name'] else ""
-                print(f"  Extracted: {output_file.name}{track_info}")
-                extracted_count += 1
-                self.stats['extracted'] += 1
-            else:
-                self.stats['errors'] += 1
+                # Extract the subtitle
+                if extract_method(video_file, track['id'], output_file):
+                    track_info = f" ({track['track_name']})" if track['track_name'] else ""
+                    print(f"  Extracted: {output_file.name}{track_info}")
+                    extracted_count += 1
+                    self.stats['extracted'] += 1
+                else:
+                    self.stats['errors'] += 1
 
         if extracted_count == 0 and subtitle_tracks:
             print(f"  No new subtitles extracted")
@@ -250,12 +324,16 @@ class SubtitleExtractor:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Extract English subtitles from MKV and MP4 files',
+        description='Extract subtitles from MKV and MP4 files',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s /path/to/tv/shows
-  %(prog)s /path/to/movies --overwrite
+  %(prog)s /path/to/movies --languages en es fr
+  %(prog)s /path/to/videos --languages spa --overwrite
+
+Supported language codes: en, es, fr, de, it, pt, ru, ja, zh, ko, ar, hi, nl, pl, sv, no, da, fi, tr, el, he, cs, hu, ro, th, vi
+You can also use ISO 639-2 codes (eng, spa, fra, etc.) or language names (english, spanish, french, etc.)
 
 Note: Requires mkvtoolnix (for MKV) and ffmpeg (for MP4)
         """
@@ -264,6 +342,12 @@ Note: Requires mkvtoolnix (for MKV) and ffmpeg (for MP4)
         'directory',
         type=Path,
         help='Directory containing video files (will search recursively)'
+    )
+    parser.add_argument(
+        '-l', '--languages',
+        nargs='+',
+        default=['en'],
+        help='Language codes to extract (default: en). Accepts ISO 639-1 (en), ISO 639-2 (eng), or language names (english)'
     )
     parser.add_argument(
         '--overwrite',
@@ -310,7 +394,11 @@ Note: Requires mkvtoolnix (for MKV) and ffmpeg (for MP4)
         print("Install with: sudo apt-get install ffmpeg (Ubuntu/Debian)\n", file=sys.stderr)
 
     # Process files
-    extractor = SubtitleExtractor(overwrite=args.overwrite)
+    extractor = SubtitleExtractor(overwrite=args.overwrite, languages=args.languages)
+
+    # Show which languages we're extracting
+    print(f"Extracting subtitles for: {', '.join(extractor.target_languages)}\n")
+
     extractor.process_directory(args.directory)
     extractor.print_summary()
 
