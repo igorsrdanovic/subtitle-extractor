@@ -397,6 +397,28 @@ class SubtitleExtractor:
             print(f"  Error extracting track {track_id}: {e}")
             return False
 
+    def _check_existing_subtitles(self, video_file: Path) -> bool:
+        """Check if subtitle files already exist for any target language.
+        Returns True if subtitles exist for at least one target language."""
+        # Common subtitle extensions
+        subtitle_extensions = ['.srt', '.ass', '.sup', '.sub', '.ssa']
+
+        for lang in self.target_languages:
+            # Check for single subtitle file: video.{lang}.{ext}
+            for ext in subtitle_extensions:
+                subtitle_file = video_file.parent / f"{video_file.stem}.{lang}{ext}"
+                if subtitle_file.exists():
+                    return True
+
+            # Check for numbered subtitle files: video.{lang}.1.{ext}, video.{lang}.2.{ext}, etc.
+            for i in range(1, 10):  # Check up to 10 tracks
+                for ext in subtitle_extensions:
+                    subtitle_file = video_file.parent / f"{video_file.stem}.{lang}.{i}{ext}"
+                    if subtitle_file.exists():
+                        return True
+
+        return False
+
     def process_video_file(self, video_file: Path) -> Dict:
         """Process a single video file and extract subtitles.
         Returns dict with processing results for logging."""
@@ -406,6 +428,14 @@ class SubtitleExtractor:
         if self.resume and file_key in self.processed_files:
             print(f"Skipped (already processed): {video_file}")
             return {'file': str(video_file), 'status': 'resumed_skip', 'subtitles': []}
+
+        # Check if subtitles already exist (unless overwrite mode)
+        if not self.overwrite and not self.dry_run:
+            if self._check_existing_subtitles(video_file):
+                print(f"Processing: {video_file}")
+                print(f"  Skipped: Subtitle files already exist (use --overwrite to force re-extraction)")
+                self.stats['skipped'] += 1
+                return {'file': str(video_file), 'status': 'subtitles_exist', 'subtitles': []}
 
         print(f"Processing: {video_file}")
         self.stats['processed'] += 1
@@ -666,7 +696,7 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     parser.add_argument(
         '--overwrite',
         action='store_true',
-        help='Overwrite existing subtitle files'
+        help='Force re-extraction even if subtitle files already exist'
     )
     parser.add_argument(
         '--dry-run',

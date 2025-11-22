@@ -13,7 +13,7 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
   - ASS/SSA → `.ass`
   - PGS/VobSub → `.sup`
   - MP4 text/mov_text → `.srt`
-- Skips files that already have extracted subtitles
+- **Smart file skipping**: Automatically skips files that already have subtitle files (fast re-runs)
 - Handles multiple subtitle tracks per language
 - **Real-time progress tracking**: Shows files completed, remaining, and percentage
 - Robust error handling
@@ -114,14 +114,30 @@ Extract multiple languages (English, Spanish, and French):
 python extract_subs.py /path/to/videos --languages en es fr
 ```
 
-### Other Options
+### Smart File Skipping
 
-Overwrite existing subtitle files:
+By default, the script skips video files that already have subtitle files for the target languages. This makes re-running the script on the same directory very fast:
+
+```bash
+# First run - extracts all subtitles
+python extract_subs.py /path/to/videos --languages en
+
+# Second run - instantly skips files that already have en subtitles
+python extract_subs.py /path/to/videos --languages en
+```
+
+To force re-extraction even if subtitles exist:
 ```bash
 python extract_subs.py /path/to/tv/shows --overwrite
 ```
 
-Combine language selection with overwrite:
+The script checks for subtitle files with these patterns:
+- `video.{lang}.srt` (or .ass, .sup, .sub, .ssa)
+- `video.{lang}.1.srt`, `video.{lang}.2.srt`, etc.
+
+### Overwrite Mode
+
+Force re-extraction and overwrite existing subtitle files:
 ```bash
 python extract_subs.py /path/to/videos --languages en fr --overwrite
 ```
@@ -343,7 +359,7 @@ optional arguments:
   -h, --help                        Show help message and exit
   -l LANG [LANG ...], --languages LANG [LANG ...]
                                     Language codes to extract (default: en)
-  --overwrite                       Overwrite existing subtitle files
+  --overwrite                       Force re-extraction even if subtitle files exist
   --dry-run                         Preview without making changes
   --threads N                       Number of parallel threads (default: 1)
   --include-forced                  Include forced subtitles
