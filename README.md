@@ -294,6 +294,8 @@ Extracting subtitles for: en
 
 Found 2 MKV file(s) and 0 MP4 file(s)
 
+Started: 2024-01-15 14:30:00
+
 Processing: /media/tv/Show/Season 1/episode01.mkv
   Extracted: episode01.en.srt
   Progress: 1/2 files completed (50.0%) | 1 remaining
@@ -309,6 +311,10 @@ Files processed:      2
 Subtitles extracted:  1
 Files skipped:        1
 Errors encountered:   0
+
+Started:              2024-01-15 14:30:00
+Finished:             2024-01-15 14:30:45
+Duration:             45s
 ```
 
 ### Example 2: Extract multiple languages
@@ -318,6 +324,8 @@ $ python extract_subs.py /media/movies --languages en es fr
 Extracting subtitles for: en, es, fr
 
 Found 0 MKV file(s) and 2 MP4 file(s)
+
+Started: 2024-01-15 15:00:00
 
 Processing: /media/movies/movie1.mp4
   Extracted: movie1.en.srt
@@ -336,6 +344,10 @@ Files processed:      2
 Subtitles extracted:  3
 Files skipped:        1
 Errors encountered:   0
+
+Started:              2024-01-15 15:00:00
+Finished:             2024-01-15 15:02:30
+Duration:             2m 30s
 ```
 
 ## Error Handling

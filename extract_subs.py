@@ -113,6 +113,10 @@ class SubtitleExtractor:
         self.total_files = 0
         self.current_file = 0
 
+        # Timing tracking
+        self.start_time = None
+        self.end_time = None
+
         # Resume tracking - processed files
         self.processed_files: Set[str] = set()
         if self.resume and self.resume_file.exists():
@@ -553,11 +557,18 @@ class SubtitleExtractor:
         if self.dry_run:
             print("[DRY-RUN MODE] No files will be modified\n")
 
+        # Record start time
+        self.start_time = datetime.now()
+        print(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
         # Process files - parallel or sequential
         if self.threads > 1 and not self.dry_run:
             self._process_parallel(video_files)
         else:
             self._process_sequential(video_files)
+
+        # Record end time
+        self.end_time = datetime.now()
 
         # Save resume state and reports
         if not self.dry_run:
@@ -641,6 +652,24 @@ class SubtitleExtractor:
         print(f"Subtitles extracted:  {self.stats['extracted']}")
         print(f"Files skipped:        {self.stats['skipped']}")
         print(f"Errors encountered:   {self.stats['errors']}")
+
+        # Display timing information
+        if self.start_time and self.end_time:
+            duration = self.end_time - self.start_time
+            hours, remainder = divmod(int(duration.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            print()
+            print(f"Started:              {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Finished:             {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # Format duration based on length
+            if hours > 0:
+                print(f"Duration:             {hours}h {minutes}m {seconds}s")
+            elif minutes > 0:
+                print(f"Duration:             {minutes}m {seconds}s")
+            else:
+                print(f"Duration:             {seconds}s")
 
 
 def load_config() -> Dict:
