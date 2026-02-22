@@ -26,6 +26,12 @@ except ImportError:
 class SubtitleExtractor:
     """Handles extraction of English subtitles from MKV and MP4 files."""
 
+    # Image-based subtitle codecs that require OCR for text conversion
+    IMAGE_BASED_CODECS = {
+        'hdmv_pgs_subtitle', 'pgssub', 'hdmv pgs', 'dvd_subtitle', 'dvdsub',
+        'vobsub', 'dvbsub', 'dvb_subtitle'
+    }
+
     # Codec to extension mapping
     CODEC_EXTENSIONS = {
         'SubRip/SRT': 'srt',
@@ -211,6 +217,20 @@ class SubtitleExtractor:
         return False, ""
 
     @staticmethod
+    def check_pgsrip() -> bool:
+        """Check if pgsrip is installed (used for OCR of image-based subtitles)."""
+        try:
+            subprocess.run(['pgsrip', '--help'],
+                         capture_output=True)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _is_image_based_codec(self, codec: str) -> bool:
+        """Return True if codec is image-based and requires OCR for text conversion."""
+        return any(c in codec.lower() for c in self.IMAGE_BASED_CODECS)
+
+    @staticmethod
     def check_mkvtoolnix() -> bool:
         """Check if mkvtoolnix tools are installed."""
         try:
@@ -315,8 +335,9 @@ class SubtitleExtractor:
 
     def get_extension_for_codec(self, codec: str) -> str:
         """Determine file extension based on subtitle codec."""
-        # If conversion is requested, return that extension
-        if self.convert_to:
+        # Image-based codecs must be extracted to their native format first,
+        # then OCR'd in a separate step - never extract directly to srt/ass
+        if self.convert_to and not self._is_image_based_codec(codec):
             return self.convert_to
 
         for codec_name, ext in self.CODEC_EXTENSIONS.items():
@@ -351,24 +372,65 @@ class SubtitleExtractor:
 
         return output_path
 
-    def _convert_subtitle(self, input_file: Path, output_file: Path) -> bool:
-        """Convert subtitle format if needed."""
+    def _convert_subtitle(self, input_file: Path, output_file: Path,
+                          source_codec: str = '') -> bool:
+        """Convert subtitle format if needed.
+        Routes image-based codecs (PGS/dvdsub) to pgsrip for OCR instead of ffmpeg."""
         if not self.convert_to or input_file.suffix[1:] == self.convert_to:
             return True  # No conversion needed
 
+        is_image_based = self._is_image_based_codec(source_codec) or input_file.suffix in ('.sup', '.sub')
+
+        if is_image_based and self.convert_to == 'srt':
+            return self._ocr_convert(input_file, output_file)
+        elif is_image_based:
+            logging.warning(f"Cannot convert image-based subtitle {input_file.name} to {self.convert_to} - skipping conversion")
+            return True  # Leave as-is rather than failing
+
         try:
-            # Use ffmpeg to convert subtitle format
             subprocess.run(
                 ['ffmpeg', '-y', '-i', str(input_file), str(output_file)],
                 capture_output=True,
                 check=True
             )
-            # Remove original if conversion successful
             if output_file.exists() and input_file != output_file:
                 input_file.unlink()
             return True
         except subprocess.CalledProcessError as e:
             logging.error(f"Error converting {input_file} to {self.convert_to}: {e}")
+            return False
+
+    def _ocr_convert(self, input_file: Path, output_file: Path) -> bool:
+        """Convert image-based subtitle to SRT using pgsrip OCR."""
+        if not self.check_pgsrip():
+            logging.error(
+                f"pgsrip is required to convert image-based subtitles to SRT.\n"
+                f"Install with: pip install pgsrip\n"
+                f"Also ensure Tesseract is installed: apt install tesseract-ocr"
+            )
+            return False
+
+        try:
+            # pgsrip writes output next to the input file with .srt extension
+            result = subprocess.run(
+                ['pgsrip', str(input_file)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            pgsrip_output = input_file.with_suffix('.srt')
+            if pgsrip_output.exists():
+                if pgsrip_output != output_file:
+                    pgsrip_output.rename(output_file)
+                # Remove original .sup if conversion succeeded
+                if input_file.exists() and input_file != output_file:
+                    input_file.unlink()
+                return True
+            else:
+                logging.error(f"pgsrip did not produce output for {input_file.name}: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            logging.error(f"pgsrip failed for {input_file.name}: {e.stderr}")
             return False
 
     def extract_subtitle(self, mkv_file: Path, track_id: int,
@@ -505,7 +567,7 @@ class SubtitleExtractor:
                     # Handle conversion if needed
                     if self.convert_to:
                         final_output = output_file.with_suffix(f'.{self.convert_to}')
-                        if not self._convert_subtitle(output_file, final_output):
+                        if not self._convert_subtitle(output_file, final_output, track['codec']):
                             self.stats['errors'] += 1
                             result['errors'].append(f"Conversion failed for {output_file.name}")
                             continue
@@ -541,6 +603,16 @@ class SubtitleExtractor:
         mp4_files = sorted(directory.rglob('*.mp4'))
         video_files = sorted(mkv_files + mp4_files)
 
+        # Find orphaned .sup sidecar files (next to video files) if OCR conversion requested
+        sidecar_sups = []
+        if self.convert_to == 'srt':
+            all_sups = set(directory.rglob('*.sup'))
+            # Exclude .sup files that would be produced by this run's extraction
+            for sup_file in sorted(all_sups):
+                srt_equivalent = sup_file.with_suffix('.srt')
+                if not srt_equivalent.exists() or self.overwrite:
+                    sidecar_sups.append(sup_file)
+
         if not video_files:
             print(f"No MKV or MP4 files found in {directory}")
             return
@@ -553,6 +625,8 @@ class SubtitleExtractor:
         mkv_count = len(mkv_files)
         mp4_count = len(mp4_files)
         print(f"Found {mkv_count} MKV file(s) and {mp4_count} MP4 file(s)\n")
+        if sidecar_sups:
+            print(f"Found {len(sidecar_sups)} sidecar .sup file(s) to OCR\n")
 
         if self.dry_run:
             print("[DRY-RUN MODE] No files will be modified\n")
@@ -566,6 +640,20 @@ class SubtitleExtractor:
             self._process_parallel(video_files)
         else:
             self._process_sequential(video_files)
+
+        # OCR any sidecar .sup files
+        if sidecar_sups and not self.dry_run:
+            print(f"\nProcessing sidecar .sup files with OCR...")
+            for sup_file in sidecar_sups:
+                print(f"  OCR: {sup_file.name}")
+                srt_output = sup_file.with_suffix('.srt')
+                if self._ocr_convert(sup_file, srt_output):
+                    print(f"    -> {srt_output.name}")
+                    self.stats['extracted'] += 1
+                else:
+                    self.stats['errors'] += 1
+        elif sidecar_sups and self.dry_run:
+            print(f"\n[DRY-RUN] Would OCR {len(sidecar_sups)} sidecar .sup file(s)")
 
         # Record end time
         self.end_time = datetime.now()
@@ -837,6 +925,10 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     if not has_ffmpeg:
         print("Warning: ffmpeg not found. MP4 files will be skipped.", file=sys.stderr)
         print("Install with: sudo apt-get install ffmpeg (Ubuntu/Debian)\n", file=sys.stderr)
+
+    if convert_to == 'srt' and not SubtitleExtractor.check_pgsrip():
+        print("Warning: pgsrip not found. Image-based subtitles (PGS/dvdsub) cannot be OCR'd.", file=sys.stderr)
+        print("Install with: pip install pgsrip && apt install tesseract-ocr\n", file=sys.stderr)
 
     # Process files
     extractor = SubtitleExtractor(
