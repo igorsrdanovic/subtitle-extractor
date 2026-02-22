@@ -11,6 +11,7 @@ import logging
 import pickle
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,9 @@ class SubtitleExtractor:
         'vie': 'vi', 'vi': 'vi', 'vietnamese': 'vi',
     }
 
+    # Upper bound for numbered subtitle file detection (e.g. video.en.1.srt … video.en.N.srt)
+    MAX_SUBTITLE_TRACK_INDEX = 20
+
     def __init__(self, overwrite: bool = False, languages: List[str] = None,
                  dry_run: bool = False, threads: int = 1,
                  include_forced: bool = False, include_sdh: bool = False,
@@ -131,6 +135,9 @@ class SubtitleExtractor:
         # Report data
         self.extraction_log: List[Dict] = []
 
+        # Lock for thread-safe access to shared mutable state
+        self._lock = threading.Lock()
+
         # Setup logging
         self._setup_logging()
 
@@ -178,7 +185,7 @@ class SubtitleExtractor:
             with open(self.resume_file, 'rb') as f:
                 self.processed_files = pickle.load(f)
             logging.info(f"Resumed: {len(self.processed_files)} files already processed")
-        except Exception as e:
+        except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
             logging.warning(f"Could not load resume state: {e}")
             self.processed_files = set()
 
@@ -187,7 +194,7 @@ class SubtitleExtractor:
         try:
             with open(self.resume_file, 'wb') as f:
                 pickle.dump(self.processed_files, f)
-        except Exception as e:
+        except OSError as e:
             logging.warning(f"Could not save resume state: {e}")
 
     def _should_skip_track(self, track: Dict) -> Tuple[bool, str]:
@@ -288,7 +295,7 @@ class SubtitleExtractor:
 
             return matching_subs
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
-            print(f"  Error reading tracks: {e}")
+            logging.error(f"  Error reading tracks: {e}")
             return []
 
     def get_subtitle_tracks_mp4(self, mp4_file: Path) -> List[Dict]:
@@ -330,7 +337,7 @@ class SubtitleExtractor:
 
             return matching_subs
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
-            print(f"  Error reading tracks: {e}")
+            logging.error(f"  Error reading tracks: {e}")
             return []
 
     def get_extension_for_codec(self, codec: str) -> str:
@@ -445,7 +452,7 @@ class SubtitleExtractor:
             )
             return True
         except subprocess.CalledProcessError as e:
-            print(f"  Error extracting track {track_id}: {e}")
+            logging.error(f"  Error extracting track {track_id}: {e}")
             return False
 
     def extract_subtitle_mp4(self, mp4_file: Path, track_id: int,
@@ -460,7 +467,7 @@ class SubtitleExtractor:
             )
             return True
         except subprocess.CalledProcessError as e:
-            print(f"  Error extracting track {track_id}: {e}")
+            logging.error(f"  Error extracting track {track_id}: {e}")
             return False
 
     def _check_existing_subtitles(self, video_file: Path) -> bool:
@@ -477,7 +484,7 @@ class SubtitleExtractor:
                     return True
 
             # Check for numbered subtitle files: video.{lang}.1.{ext}, video.{lang}.2.{ext}, etc.
-            for i in range(1, 10):  # Check up to 10 tracks
+            for i in range(1, self.MAX_SUBTITLE_TRACK_INDEX + 1):
                 for ext in subtitle_extensions:
                     subtitle_file = video_file.parent / f"{video_file.stem}.{lang}.{i}{ext}"
                     if subtitle_file.exists():
@@ -492,19 +499,21 @@ class SubtitleExtractor:
 
         # Skip if already processed (resume mode)
         if self.resume and file_key in self.processed_files:
-            print(f"Skipped (already processed): {video_file}")
+            logging.info(f"Skipped (already processed): {video_file}")
             return {'file': str(video_file), 'status': 'resumed_skip', 'subtitles': []}
 
         # Check if subtitles already exist (unless overwrite mode)
         if not self.overwrite and not self.dry_run:
             if self._check_existing_subtitles(video_file):
-                print(f"Processing: {video_file}")
-                print(f"  Skipped: Subtitle files already exist (use --overwrite to force re-extraction)")
-                self.stats['skipped'] += 1
+                logging.info(f"Processing: {video_file}")
+                logging.info(f"  Skipped: Subtitle files already exist (use --overwrite to force re-extraction)")
+                with self._lock:
+                    self.stats['skipped'] += 1
                 return {'file': str(video_file), 'status': 'subtitles_exist', 'subtitles': []}
 
-        print(f"Processing: {video_file}")
-        self.stats['processed'] += 1
+        logging.info(f"Processing: {video_file}")
+        with self._lock:
+            self.stats['processed'] += 1
 
         result = {'file': str(video_file), 'status': 'processed', 'subtitles': [], 'errors': []}
 
@@ -517,15 +526,17 @@ class SubtitleExtractor:
             subtitle_tracks = self.get_subtitle_tracks_mp4(video_file)
             extract_method = self.extract_subtitle_mp4
         else:
-            print(f"  Skipped: Unsupported file format")
-            self.stats['skipped'] += 1
+            logging.info(f"  Skipped: Unsupported file format")
+            with self._lock:
+                self.stats['skipped'] += 1
             result['status'] = 'unsupported'
             return result
 
         if not subtitle_tracks:
             lang_list = ', '.join(self.target_languages)
-            print(f"  Skipped: No subtitles found for language(s): {lang_list}")
-            self.stats['skipped'] += 1
+            logging.info(f"  Skipped: No subtitles found for language(s): {lang_list}")
+            with self._lock:
+                self.stats['skipped'] += 1
             result['status'] = 'no_subtitles'
             return result
 
@@ -550,14 +561,15 @@ class SubtitleExtractor:
 
                 # Check if file already exists
                 if output_file.exists() and not self.overwrite:
-                    print(f"  Skipped: {output_file.name} already exists")
-                    self.stats['skipped'] += 1
+                    logging.info(f"  Skipped: {output_file.name} already exists")
+                    with self._lock:
+                        self.stats['skipped'] += 1
                     continue
 
                 # Dry-run mode - just show what would be extracted
                 if self.dry_run:
                     track_info = f" ({track['track_name']})" if track['track_name'] else ""
-                    print(f"  [DRY-RUN] Would extract: {output_file.name}{track_info}")
+                    logging.info(f"  [DRY-RUN] Would extract: {output_file.name}{track_info}")
                     result['subtitles'].append({'output': str(output_file), 'language': lang, 'dry_run': True})
                     extracted_count += 1
                     continue
@@ -568,26 +580,30 @@ class SubtitleExtractor:
                     if self.convert_to:
                         final_output = output_file.with_suffix(f'.{self.convert_to}')
                         if not self._convert_subtitle(output_file, final_output, track['codec']):
-                            self.stats['errors'] += 1
+                            with self._lock:
+                                self.stats['errors'] += 1
                             result['errors'].append(f"Conversion failed for {output_file.name}")
                             continue
                         output_file = final_output
 
                     track_info = f" ({track['track_name']})" if track['track_name'] else ""
-                    print(f"  Extracted: {output_file.name}{track_info}")
+                    logging.info(f"  Extracted: {output_file.name}{track_info}")
                     result['subtitles'].append({'output': str(output_file), 'language': lang})
                     extracted_count += 1
-                    self.stats['extracted'] += 1
+                    with self._lock:
+                        self.stats['extracted'] += 1
                 else:
-                    self.stats['errors'] += 1
+                    with self._lock:
+                        self.stats['errors'] += 1
                     result['errors'].append(f"Extraction failed for track {track['id']}")
 
         if extracted_count == 0 and subtitle_tracks and not self.dry_run:
-            print(f"  No new subtitles extracted")
+            logging.info(f"  No new subtitles extracted")
 
         # Mark as processed for resume functionality
         if not self.dry_run:
-            self.processed_files.add(file_key)
+            with self._lock:
+                self.processed_files.add(file_key)
 
         return result
 
@@ -595,7 +611,7 @@ class SubtitleExtractor:
         """Print progress information."""
         remaining = self.total_files - self.current_file
         percentage = (self.current_file / self.total_files * 100) if self.total_files > 0 else 0
-        print(f"  Progress: {self.current_file}/{self.total_files} files completed ({percentage:.1f}%) | {remaining} remaining")
+        logging.info(f"  Progress: {self.current_file}/{self.total_files} files completed ({percentage:.1f}%) | {remaining} remaining")
 
     def process_directory(self, directory: Path) -> None:
         """Recursively process all MKV and MP4 files in directory."""
@@ -614,7 +630,7 @@ class SubtitleExtractor:
                     sidecar_sups.append(sup_file)
 
         if not video_files:
-            print(f"No MKV or MP4 files found in {directory}")
+            logging.info(f"No MKV or MP4 files found in {directory}")
             return
 
         # Set base directory for preserve_structure feature
@@ -624,36 +640,36 @@ class SubtitleExtractor:
         self.total_files = len(video_files)
         mkv_count = len(mkv_files)
         mp4_count = len(mp4_files)
-        print(f"Found {mkv_count} MKV file(s) and {mp4_count} MP4 file(s)\n")
+        logging.info(f"Found {mkv_count} MKV file(s) and {mp4_count} MP4 file(s)\n")
         if sidecar_sups:
-            print(f"Found {len(sidecar_sups)} sidecar .sup file(s) to OCR\n")
+            logging.info(f"Found {len(sidecar_sups)} sidecar .sup file(s) to OCR\n")
 
         if self.dry_run:
-            print("[DRY-RUN MODE] No files will be modified\n")
+            logging.info("[DRY-RUN MODE] No files will be modified\n")
 
         # Record start time
         self.start_time = datetime.now()
-        print(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        logging.info(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
         # Process files - parallel or sequential
-        if self.threads > 1 and not self.dry_run:
+        if self.threads > 1:
             self._process_parallel(video_files)
         else:
             self._process_sequential(video_files)
 
         # OCR any sidecar .sup files
         if sidecar_sups and not self.dry_run:
-            print(f"\nProcessing sidecar .sup files with OCR...")
+            logging.info(f"\nProcessing sidecar .sup files with OCR...")
             for sup_file in sidecar_sups:
-                print(f"  OCR: {sup_file.name}")
+                logging.info(f"  OCR: {sup_file.name}")
                 srt_output = sup_file.with_suffix('.srt')
                 if self._ocr_convert(sup_file, srt_output):
-                    print(f"    -> {srt_output.name}")
+                    logging.info(f"    -> {srt_output.name}")
                     self.stats['extracted'] += 1
                 else:
                     self.stats['errors'] += 1
         elif sidecar_sups and self.dry_run:
-            print(f"\n[DRY-RUN] Would OCR {len(sidecar_sups)} sidecar .sup file(s)")
+            logging.info(f"\n[DRY-RUN] Would OCR {len(sidecar_sups)} sidecar .sup file(s)")
 
         # Record end time
         self.end_time = datetime.now()
@@ -671,16 +687,16 @@ class SubtitleExtractor:
                 result = self.process_video_file(video_file)
                 self.extraction_log.append(result)
                 self._print_progress()
-                print()  # Empty line between files
-            except Exception as e:
+                logging.info("")  # Empty line between files
+            except (subprocess.SubprocessError, OSError, ValueError) as e:
                 logging.error(f"Unexpected error processing {video_file}: {e}")
                 self.stats['errors'] += 1
                 self._print_progress()
-                print()
+                logging.info("")
 
     def _process_parallel(self, video_files: List[Path]) -> None:
         """Process video files in parallel using thread pool."""
-        print(f"Using {self.threads} threads for parallel processing\n")
+        logging.info(f"Using {self.threads} threads for parallel processing\n")
 
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             # Submit all tasks
@@ -690,15 +706,17 @@ class SubtitleExtractor:
             for future in as_completed(future_to_file):
                 video_file = future_to_file[future]
                 try:
-                    self.current_file += 1
                     result = future.result()
-                    self.extraction_log.append(result)
+                    with self._lock:
+                        self.current_file += 1
+                        self.extraction_log.append(result)
                     self._print_progress()
-                    print()
-                except Exception as e:
+                    logging.info("")
+                except (subprocess.SubprocessError, OSError, ValueError) as e:
                     logging.error(f"Unexpected error processing {video_file}: {e}")
-                    self.stats['errors'] += 1
-                    print()
+                    with self._lock:
+                        self.stats['errors'] += 1
+                    logging.info("")
 
     def _save_reports(self) -> None:
         """Save extraction reports if requested."""
@@ -715,7 +733,7 @@ class SubtitleExtractor:
                     'stats': self.stats,
                     'files': self.extraction_log
                 }, f, indent=2)
-            print(f"\nReport saved to: {report_file}")
+            logging.info(f"\nReport saved to: {report_file}")
 
         elif self.report_format == 'csv':
             report_file = Path(f"subtitle_extraction_{timestamp}.csv")
@@ -729,17 +747,17 @@ class SubtitleExtractor:
                         len(entry.get('subtitles', [])),
                         '; '.join(entry.get('errors', []))
                     ])
-            print(f"\nReport saved to: {report_file}")
+            logging.info(f"\nReport saved to: {report_file}")
 
     def print_summary(self) -> None:
         """Print extraction summary."""
-        print("=" * 50)
-        print("SUMMARY")
-        print("=" * 50)
-        print(f"Files processed:      {self.stats['processed']}")
-        print(f"Subtitles extracted:  {self.stats['extracted']}")
-        print(f"Files skipped:        {self.stats['skipped']}")
-        print(f"Errors encountered:   {self.stats['errors']}")
+        logging.info("=" * 50)
+        logging.info("SUMMARY")
+        logging.info("=" * 50)
+        logging.info(f"Files processed:      {self.stats['processed']}")
+        logging.info(f"Subtitles extracted:  {self.stats['extracted']}")
+        logging.info(f"Files skipped:        {self.stats['skipped']}")
+        logging.info(f"Errors encountered:   {self.stats['errors']}")
 
         # Display timing information
         if self.start_time and self.end_time:
@@ -747,17 +765,17 @@ class SubtitleExtractor:
             hours, remainder = divmod(int(duration.total_seconds()), 3600)
             minutes, seconds = divmod(remainder, 60)
 
-            print()
-            print(f"Started:              {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"Finished:             {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logging.info("")
+            logging.info(f"Started:              {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logging.info(f"Finished:             {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
             # Format duration based on length
             if hours > 0:
-                print(f"Duration:             {hours}h {minutes}m {seconds}s")
+                logging.info(f"Duration:             {hours}h {minutes}m {seconds}s")
             elif minutes > 0:
-                print(f"Duration:             {minutes}m {seconds}s")
+                logging.info(f"Duration:             {minutes}m {seconds}s")
             else:
-                print(f"Duration:             {seconds}s")
+                logging.info(f"Duration:             {seconds}s")
 
 
 def load_config() -> Dict:
@@ -773,19 +791,31 @@ def load_config() -> Dict:
                 try:
                     with open(config_file) as f:
                         config = yaml.safe_load(f)
-                        print(f"Loaded configuration from: {config_file}\n")
+                        logging.info(f"Loaded configuration from: {config_file}\n")
                         return config or {}
                 except Exception as e:
-                    print(f"Warning: Could not load config from {config_file}: {e}")
+                    logging.warning(f"Could not load config from {config_file}: {e}")
             else:
-                print(f"Warning: YAML library not installed. Install with: pip install pyyaml")
+                logging.warning(f"YAML library not installed. Install with: pip install pyyaml")
             break
 
     return {}
 
 
+def _positive_int(value: str) -> int:
+    """argparse type validator: integer >= 1."""
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"threads must be >= 1, got {value}")
+    return ivalue
+
+
 def main():
     """Main entry point."""
+    # Basic logging setup so pre-extractor messages (config loading, tool checks) are visible.
+    # SubtitleExtractor._setup_logging() will reconfigure this after args are parsed.
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+
     parser = argparse.ArgumentParser(
         description='Extract subtitles from MKV and MP4 files with advanced features',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -822,9 +852,9 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     )
     parser.add_argument(
         '--threads',
-        type=int,
+        type=_positive_int,
         default=1,
-        help='Number of parallel threads (default: 1)'
+        help='Number of parallel threads, must be >= 1 (default: 1)'
     )
     parser.add_argument(
         '--include-forced',
@@ -885,7 +915,7 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     languages = args.languages or config.get('languages', ['en'])
     overwrite = args.overwrite or config.get('overwrite', False)
     dry_run = args.dry_run or config.get('dry_run', False)
-    threads = args.threads if args.threads > 1 else config.get('threads', 1)
+    threads = args.threads if args.threads != parser.get_default('threads') else config.get('threads', 1)
     output_dir = args.output_dir or (Path(config['output_dir']) if 'output_dir' in config else None)
     preserve_structure = args.preserve_structure or config.get('preserve_structure', False)
     convert_to = args.convert_to or config.get('convert_to')
@@ -949,7 +979,7 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     )
 
     # Show which languages we're extracting
-    print(f"Extracting subtitles for: {', '.join(extractor.target_languages)}\n")
+    logging.info(f"Extracting subtitles for: {', '.join(extractor.target_languages)}\n")
 
     extractor.process_directory(args.directory)
     extractor.print_summary()
