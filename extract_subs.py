@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MKV/MP4 Subtitle Extractor
-Extracts subtitles from MKV and MP4 files recursively with advanced features.
+Video Subtitle Extractor
+Extracts subtitles from MKV, MP4, WebM, MOV, and AVI files recursively with advanced features.
 """
 
 import argparse
@@ -23,15 +23,24 @@ try:
 except ImportError:
     HAS_YAML = False
 
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, TaskProgressColumn
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+
 
 class SubtitleExtractor:
-    """Handles extraction of English subtitles from MKV and MP4 files."""
+    """Handles extraction of subtitles from MKV, MP4, WebM, MOV, and AVI files."""
 
     # Image-based subtitle codecs that require OCR for text conversion
     IMAGE_BASED_CODECS = {
         'hdmv_pgs_subtitle', 'pgssub', 'hdmv pgs', 'dvd_subtitle', 'dvdsub',
         'vobsub', 'dvbsub', 'dvb_subtitle'
     }
+
+    # Supported ffmpeg formats (MP4 and additional formats)
+    FFMPEG_FORMATS = {'.mp4', '.webm', '.mov', '.avi'}
 
     # Codec to extension mapping
     CODEC_EXTENSIONS = {
@@ -138,6 +147,11 @@ class SubtitleExtractor:
         # Lock for thread-safe access to shared mutable state
         self._lock = threading.Lock()
 
+        # Progress bar tracking (rich library)
+        self.use_rich = HAS_RICH and not log_file  # Disable rich if logging to file
+        self.progress_bar = None
+        self.progress_task = None
+
         # Setup logging
         self._setup_logging()
 
@@ -178,6 +192,28 @@ class SubtitleExtractor:
             )
         else:
             logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+    def _init_progress_bar(self) -> None:
+        """Initialize rich progress bar if available."""
+        if not self.use_rich:
+            return
+
+        try:
+            self.progress_bar = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("•"),
+                TimeRemainingColumn(),
+            )
+            self.progress_task = self.progress_bar.add_task(
+                "Extracting subtitles",
+                total=self.total_files
+            )
+        except Exception as e:
+            logging.debug(f"Failed to init progress bar: {e}")
+            self.use_rich = False
 
     def _load_resume_state(self) -> None:
         """Load processed files from resume file."""
@@ -338,6 +374,62 @@ class SubtitleExtractor:
             return matching_subs
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
             logging.error(f"  Error reading tracks: {e}")
+            return []
+
+    def _get_all_subtitle_tracks_mkv(self, mkv_file: Path) -> List[Dict]:
+        """Get ALL subtitle tracks from MKV (no language filtering)."""
+        try:
+            result = subprocess.run(
+                ['mkvmerge', '-J', str(mkv_file)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            data = json.loads(result.stdout)
+
+            tracks = []
+            for track in data.get('tracks', []):
+                if track['type'] == 'subtitles':
+                    props = track.get('properties', {})
+                    tracks.append({
+                        'id': track['id'],
+                        'codec': track['codec'],
+                        'language': props.get('language', 'und'),
+                        'track_name': props.get('track_name', ''),
+                        'forced': props.get('forced_track', False)
+                    })
+            return tracks
+        except (subprocess.SubprocessError, json.JSONDecodeError, KeyError) as e:
+            logging.error(f"Error reading tracks: {e}")
+            return []
+
+    def _get_all_subtitle_tracks_ffmpeg(self, video_file: Path) -> List[Dict]:
+        """Get ALL subtitle tracks from ffmpeg-supported files (no filtering)."""
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                 '-show_streams', str(video_file)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            data = json.loads(result.stdout)
+
+            tracks = []
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'subtitle':
+                    tags = stream.get('tags', {})
+                    disposition = stream.get('disposition', {})
+                    tracks.append({
+                        'id': stream['index'],
+                        'codec': stream.get('codec_name', 'unknown'),
+                        'language': tags.get('language', tags.get('LANGUAGE', 'und')),
+                        'track_name': tags.get('title', tags.get('TITLE', '')),
+                        'forced': disposition.get('forced', 0) == 1
+                    })
+            return tracks
+        except (subprocess.SubprocessError, json.JSONDecodeError, KeyError) as e:
+            logging.error(f"Error reading tracks: {e}")
             return []
 
     def get_extension_for_codec(self, codec: str) -> str:
@@ -505,13 +597,15 @@ class SubtitleExtractor:
         # Check if subtitles already exist (unless overwrite mode)
         if not self.overwrite and not self.dry_run:
             if self._check_existing_subtitles(video_file):
-                logging.info(f"Processing: {video_file}")
-                logging.info(f"  Skipped: Subtitle files already exist (use --overwrite to force re-extraction)")
+                if not self.use_rich:
+                    logging.info(f"Processing: {video_file}")
+                    logging.info(f"  Skipped: Subtitle files already exist (use --overwrite to force re-extraction)")
                 with self._lock:
                     self.stats['skipped'] += 1
                 return {'file': str(video_file), 'status': 'subtitles_exist', 'subtitles': []}
 
-        logging.info(f"Processing: {video_file}")
+        if not self.use_rich:
+            logging.info(f"Processing: {video_file}")
         with self._lock:
             self.stats['processed'] += 1
 
@@ -522,11 +616,11 @@ class SubtitleExtractor:
         if file_extension == '.mkv':
             subtitle_tracks = self.get_subtitle_tracks(video_file)
             extract_method = self.extract_subtitle
-        elif file_extension == '.mp4':
+        elif file_extension in self.FFMPEG_FORMATS:
             subtitle_tracks = self.get_subtitle_tracks_mp4(video_file)
             extract_method = self.extract_subtitle_mp4
         else:
-            logging.info(f"  Skipped: Unsupported file format")
+            logging.info(f"  Skipped: Unsupported file format ({file_extension})")
             with self._lock:
                 self.stats['skipped'] += 1
             result['status'] = 'unsupported'
@@ -608,16 +702,114 @@ class SubtitleExtractor:
         return result
 
     def _print_progress(self) -> None:
-        """Print progress information."""
-        remaining = self.total_files - self.current_file
-        percentage = (self.current_file / self.total_files * 100) if self.total_files > 0 else 0
-        logging.info(f"  Progress: {self.current_file}/{self.total_files} files completed ({percentage:.1f}%) | {remaining} remaining")
+        """Print or update progress information."""
+        if self.use_rich and self.progress_bar:
+            self.progress_bar.update(self.progress_task, completed=self.current_file)
+        else:
+            # Fallback to text
+            remaining = self.total_files - self.current_file
+            percentage = (self.current_file / self.total_files * 100) if self.total_files > 0 else 0
+            logging.info(f"  Progress: {self.current_file}/{self.total_files} files completed ({percentage:.1f}%) | {remaining} remaining")
+
+    def list_tracks_in_file(self, video_file: Path) -> Dict:
+        """List all subtitle tracks with extraction status."""
+        file_ext = video_file.suffix.lower()
+
+        if file_ext == '.mkv':
+            all_tracks = self._get_all_subtitle_tracks_mkv(video_file)
+        elif file_ext in self.FFMPEG_FORMATS:
+            all_tracks = self._get_all_subtitle_tracks_ffmpeg(video_file)
+        else:
+            return {'file': str(video_file), 'error': 'Unsupported format'}
+
+        # Evaluate each track against filters
+        evaluated = []
+        for track in all_tracks:
+            matches, normalized = self._matches_language(track.get('language', ''))
+            should_skip, reason = self._should_skip_track(track) if matches else (True, 'language')
+
+            evaluated.append({
+                **track,
+                'would_extract': matches and not should_skip,
+                'skip_reason': reason if matches else 'language mismatch',
+                'normalized_language': normalized if matches else track.get('language', 'und')
+            })
+
+        return {'file': str(video_file), 'tracks': evaluated}
+
+    def display_track_list(self, track_info: Dict) -> None:
+        """Display tracks in formatted table."""
+        file_path = track_info['file']
+        print(f"\n{'=' * 80}")
+        print(f"File: {file_path}")
+        print(f"{'=' * 80}")
+
+        if 'error' in track_info:
+            print(f"Error: {track_info['error']}")
+            return
+
+        tracks = track_info.get('tracks', [])
+        if not tracks:
+            print("No subtitle tracks found")
+            return
+
+        # Try to use rich Table if available
+        if HAS_RICH:
+            try:
+                from rich.console import Console
+                from rich.table import Table
+
+                console = Console()
+                table = Table(show_header=True, header_style="bold magenta")
+                table.add_column("ID", style="cyan", width=6)
+                table.add_column("Language", style="green", width=10)
+                table.add_column("Codec", style="yellow", width=15)
+                table.add_column("Forced", width=8)
+                table.add_column("Track Name", width=25)
+                table.add_column("Will Extract?", width=15)
+
+                for track in tracks:
+                    will_extract = "✓ Yes" if track['would_extract'] else f"✗ No ({track['skip_reason']})"
+                    track_name = track.get('track_name', '-')
+                    if len(track_name) > 25:
+                        track_name = track_name[:22] + "..."
+
+                    table.add_row(
+                        str(track['id']),
+                        track.get('normalized_language', track.get('language', 'und')),
+                        track['codec'],
+                        "Yes" if track.get('forced', False) else "No",
+                        track_name,
+                        will_extract
+                    )
+
+                console.print(table)
+                return
+            except Exception:
+                pass  # Fall back to text table
+
+        # Fallback text table
+        print(f"{'ID':<6} {'Lang':<10} {'Codec':<15} {'Forced':<8} {'Track Name':<25} {'Extract?':<15}")
+        print("-" * 80)
+        for track in tracks:
+            will_extract = "Yes" if track['would_extract'] else f"No ({track['skip_reason']})"
+            track_name = track.get('track_name', '-')
+            if len(track_name) > 25:
+                track_name = track_name[:22] + "..."
+
+            print(f"{track['id']:<6} {track.get('normalized_language', track.get('language', 'und')):<10} "
+                  f"{track['codec']:<15} {'Yes' if track.get('forced', False) else 'No':<8} "
+                  f"{track_name:<25} {will_extract:<15}")
 
     def process_directory(self, directory: Path) -> None:
-        """Recursively process all MKV and MP4 files in directory."""
+        """Recursively process all MKV, MP4, WebM, MOV, and AVI files in directory."""
         mkv_files = sorted(directory.rglob('*.mkv'))
-        mp4_files = sorted(directory.rglob('*.mp4'))
-        video_files = sorted(mkv_files + mp4_files)
+        ffmpeg_extensions = ['*.mp4', '*.webm', '*.mov', '*.avi']
+        ffmpeg_files = []
+        for ext in ffmpeg_extensions:
+            ffmpeg_files.extend(directory.rglob(ext))
+        ffmpeg_files = sorted(ffmpeg_files)
+        video_files = sorted(mkv_files + ffmpeg_files)
 
         # Find orphaned .sup sidecar files (next to video files) if OCR conversion requested
         sidecar_sups = []
@@ -630,7 +822,7 @@ class SubtitleExtractor:
                     sidecar_sups.append(sup_file)
 
         if not video_files:
-            logging.info(f"No MKV or MP4 files found in {directory}")
+            logging.info(f"No video files found in {directory}")
             return
 
         # Set base directory for preserve_structure feature
@@ -639,8 +831,8 @@ class SubtitleExtractor:
         # Set total files for progress tracking
         self.total_files = len(video_files)
         mkv_count = len(mkv_files)
-        mp4_count = len(mp4_files)
-        logging.info(f"Found {mkv_count} MKV file(s) and {mp4_count} MP4 file(s)\n")
+        ffmpeg_count = len(ffmpeg_files)
+        logging.info(f"Found {len(video_files)} total file(s) (MKV: {mkv_count}, Other: {ffmpeg_count})\n")
         if sidecar_sups:
             logging.info(f"Found {len(sidecar_sups)} sidecar .sup file(s) to OCR\n")
 
@@ -651,11 +843,21 @@ class SubtitleExtractor:
         self.start_time = datetime.now()
         logging.info(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
+        # Initialize progress bar
+        self._init_progress_bar()
+
         # Process files - parallel or sequential
-        if self.threads > 1:
-            self._process_parallel(video_files)
+        if self.use_rich and self.progress_bar:
+            with self.progress_bar:
+                if self.threads > 1:
+                    self._process_parallel(video_files)
+                else:
+                    self._process_sequential(video_files)
         else:
-            self._process_sequential(video_files)
+            if self.threads > 1:
+                self._process_parallel(video_files)
+            else:
+                self._process_sequential(video_files)
 
         # OCR any sidecar .sup files
         if sidecar_sups and not self.dry_run:
@@ -687,12 +889,14 @@ class SubtitleExtractor:
                 result = self.process_video_file(video_file)
                 self.extraction_log.append(result)
                 self._print_progress()
-                logging.info("")  # Empty line between files
+                if not self.use_rich:
+                    logging.info("")  # Empty line between files
             except (subprocess.SubprocessError, OSError, ValueError) as e:
                 logging.error(f"Unexpected error processing {video_file}: {e}")
                 self.stats['errors'] += 1
                 self._print_progress()
-                logging.info("")
+                if not self.use_rich:
+                    logging.info("")
 
     def _process_parallel(self, video_files: List[Path]) -> None:
         """Process video files in parallel using thread pool."""
@@ -711,12 +915,14 @@ class SubtitleExtractor:
                         self.current_file += 1
                         self.extraction_log.append(result)
                     self._print_progress()
-                    logging.info("")
+                    if not self.use_rich:
+                        logging.info("")
                 except (subprocess.SubprocessError, OSError, ValueError) as e:
                     logging.error(f"Unexpected error processing {video_file}: {e}")
                     with self._lock:
                         self.stats['errors'] += 1
-                    logging.info("")
+                    if not self.use_rich:
+                        logging.info("")
 
     def _save_reports(self) -> None:
         """Save extraction reports if requested."""
@@ -817,7 +1023,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     parser = argparse.ArgumentParser(
-        description='Extract subtitles from MKV and MP4 files with advanced features',
+        description='Extract subtitles from MKV, MP4, WebM, MOV, and AVI files with advanced features',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -905,6 +1111,11 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
         action='store_true',
         help='Resume from previous run (skip already processed files)'
     )
+    parser.add_argument(
+        '--list-tracks',
+        action='store_true',
+        help='List all subtitle tracks without extracting (inspection mode)'
+    )
 
     # Load config file
     config = load_config()
@@ -981,6 +1192,44 @@ Config file: Create ~/.subtitle-extractor.yaml with default settings
     # Show which languages we're extracting
     logging.info(f"Extracting subtitles for: {', '.join(extractor.target_languages)}\n")
 
+    # Handle --list-tracks mode
+    if args.list_tracks:
+        logging.info("=== TRACK INSPECTION MODE ===\n")
+
+        # Find all video files
+        directory = args.directory
+        mkv_files = sorted(directory.rglob('*.mkv'))
+        ffmpeg_extensions = ['*.mp4', '*.webm', '*.mov', '*.avi']
+        ffmpeg_files = []
+        for ext in ffmpeg_extensions:
+            ffmpeg_files.extend(directory.rglob(ext))
+        ffmpeg_files = sorted(ffmpeg_files)
+        video_files = sorted(mkv_files + ffmpeg_files)
+
+        if not video_files:
+            logging.info(f"No video files found in {directory}")
+            sys.exit(0)
+
+        logging.info(f"Found {len(video_files)} video file(s)\n")
+        filter_parts = []
+        filter_parts.append(f"Languages={', '.join(extractor.target_languages)}")
+        if args.include_forced:
+            filter_parts.append("include forced")
+        if args.include_sdh:
+            filter_parts.append("include SDH")
+        if args.exclude_commentary:
+            filter_parts.append("exclude commentary")
+        if args.track_title:
+            filter_parts.append(f"title contains '{args.track_title}'")
+        logging.info(f"Filters: {', '.join(filter_parts)}\n")
+
+        for video_file in video_files:
+            track_info = extractor.list_tracks_in_file(video_file)
+            extractor.display_track_list(track_info)
+
+        sys.exit(0)
+
+    # Normal extraction mode
     extractor.process_directory(args.directory)
     extractor.print_summary()
 

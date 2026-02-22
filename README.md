@@ -1,11 +1,11 @@
-# MKV/MP4 Subtitle Extractor
+# Video Subtitle Extractor
 
-A Python script that recursively extracts subtitles from MKV and MP4 files in multiple languages and saves them in the same directory as the source files.
+A Python script that recursively extracts subtitles from MKV, MP4, WebM, MOV, and AVI files in multiple languages and saves them in the same directory as the source files.
 
 ## Features
 
 ### Core Features
-- Recursively processes all MKV and MP4 files in a directory
+- Recursively processes all **MKV, MP4, WebM, MOV, and AVI** files in a directory
 - **Multi-language support**: Extract subtitles in one or more languages
 - Supports 25+ languages with automatic code normalization (ISO 639-1, ISO 639-2, or language names)
 - Automatically detects subtitle codec and uses appropriate extension:
@@ -15,7 +15,8 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
   - MP4 text/mov_text → `.srt`
 - **Smart file skipping**: Automatically skips files that already have subtitle files (fast re-runs)
 - Handles multiple subtitle tracks per language
-- **Real-time progress tracking**: Shows files completed, remaining, and percentage
+- **Visual progress tracking**: Enhanced progress bars (with optional `rich` library) or text-based progress
+- **Track inspection**: Preview all subtitle tracks before extraction with `--list-tracks`
 - Robust error handling
 
 ### Advanced Features
@@ -34,10 +35,11 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
 
 - Python 3.6 or higher
 - **For MKV files**: mkvtoolnix (`mkvmerge` and `mkvextract`)
-- **For MP4 files**: ffmpeg (`ffmpeg` and `ffprobe`)
+- **For MP4, WebM, MOV, AVI files**: ffmpeg (`ffmpeg` and `ffprobe`)
+- **For enhanced progress bars** *(optional)*: `rich` (Python package)
 - **For image-based subtitle OCR** *(optional)*: `pgsrip` (Python package) + `tesseract-ocr`
 
-**Note:** You need at least one of mkvtoolnix or ffmpeg installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will only process MP4 files. The OCR tools are only required when converting PGS/dvdsub image subtitles to SRT.
+**Note:** You need at least one of mkvtoolnix or ffmpeg installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will process MP4, WebM, MOV, and AVI files. The OCR tools are only required when converting PGS/dvdsub image subtitles to SRT.
 
 ### Installing mkvtoolnix (for MKV support)
 
@@ -78,6 +80,16 @@ brew install ffmpeg
 
 **Windows:**
 Download from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+
+### Installing rich (for enhanced progress bars) - Optional
+
+For better visual progress bars during extraction:
+
+```bash
+pip install rich
+```
+
+**Note:** The script works perfectly without `rich` - it will simply use text-based progress output instead. Progress bars are automatically disabled when using `--log-file` to maintain clean log files.
 
 ### Installing pgsrip + Tesseract (for image-based subtitle OCR)
 
@@ -180,6 +192,24 @@ Preview what would be extracted without making any changes:
 ```bash
 python extract_subs.py /path/to/videos --dry-run
 ```
+
+### Track Inspection Mode
+Preview all subtitle tracks in your video files before extraction:
+```bash
+# List all tracks in a directory
+python extract_subs.py /path/to/videos --list-tracks
+
+# List tracks with language filtering
+python extract_subs.py /path/to/videos --list-tracks --languages en es
+
+# List tracks with all filters applied
+python extract_subs.py /path/to/videos --list-tracks --languages en --include-forced --exclude-commentary
+```
+
+This shows a table with:
+- Track ID, language, codec, forced status, track name
+- Whether each track would be extracted based on current filters
+- Skip reasons for tracks that wouldn't be extracted
 
 ### Parallel Processing
 Use multiple threads for faster processing:
