@@ -24,7 +24,9 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
 - **Configuration File**: Save default settings in `.subtitle-extractor.yaml`
 - **Advanced Filtering**: Filter by forced/SDH/commentary tracks and track titles
 - **Logging & Reports**: Save detailed logs and generate JSON/CSV reports
-- **Subtitle Conversion**: Convert all subtitles to SRT or ASS format
+- **Subtitle Conversion**: Convert text-based subtitles to SRT or ASS format
+- **Image-based Subtitle OCR**: Convert PGS/dvdsub (`.sup`) image subtitles to SRT using `pgsrip` + Tesseract
+- **Sidecar .sup OCR**: Automatically detect and OCR standalone `.sup` files alongside video files
 - **Output Directory Control**: Extract to separate directory with optional structure preservation
 - **Resume Capability**: Continue from where you left off if interrupted
 
@@ -33,8 +35,9 @@ A Python script that recursively extracts subtitles from MKV and MP4 files in mu
 - Python 3.6 or higher
 - **For MKV files**: mkvtoolnix (`mkvmerge` and `mkvextract`)
 - **For MP4 files**: ffmpeg (`ffmpeg` and `ffprobe`)
+- **For image-based subtitle OCR** *(optional)*: `pgsrip` (Python package) + `tesseract-ocr`
 
-**Note:** You need at least one of these tools installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will only process MP4 files.
+**Note:** You need at least one of mkvtoolnix or ffmpeg installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will only process MP4 files. The OCR tools are only required when converting PGS/dvdsub image subtitles to SRT.
 
 ### Installing mkvtoolnix (for MKV support)
 
@@ -75,6 +78,34 @@ brew install ffmpeg
 
 **Windows:**
 Download from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+
+### Installing pgsrip + Tesseract (for image-based subtitle OCR)
+
+This is only needed if you want to convert PGS (`.sup`) or dvdsub image subtitles to SRT using OCR.
+
+**Install Tesseract (all platforms):**
+
+Ubuntu/Debian:
+```bash
+sudo apt-get install tesseract-ocr
+```
+
+Fedora/RHEL:
+```bash
+sudo dnf install tesseract
+```
+
+macOS:
+```bash
+brew install tesseract
+```
+
+Windows: Download from [https://github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki)
+
+**Install pgsrip Python package:**
+```bash
+pip install pgsrip
+```
 
 ## Installation
 
@@ -167,10 +198,18 @@ python extract_subs.py /path/to/videos --output-dir /path/to/subtitles --preserv
 ```
 
 ### Subtitle Conversion
-Convert all extracted subtitles to SRT format:
+Convert all extracted subtitles to SRT or ASS format:
 ```bash
+# Convert text-based subtitles (ASS, SSA) to SRT
 python extract_subs.py /path/to/videos --convert-to srt
+
+# Convert to ASS format
+python extract_subs.py /path/to/videos --convert-to ass
 ```
+
+**Image-based subtitles (PGS/dvdsub):** When `--convert-to srt` is used, image-based `.sup` files are automatically converted to SRT via OCR using `pgsrip` + Tesseract. This requires both tools to be installed (see Requirements). If `pgsrip` is not found, a warning is shown and image-based tracks are left in their native `.sup` format.
+
+**Sidecar .sup files:** The script also detects any existing `.sup` files in the directory tree that don't have a corresponding `.srt` yet, and OCR-converts them automatically when `--convert-to srt` is used.
 
 ### Advanced Filtering
 ```bash
@@ -356,6 +395,8 @@ The script handles various error scenarios:
 
 - **Missing both tools**: Exits with installation instructions for both mkvtoolnix and ffmpeg
 - **Missing one tool**: Shows warning and continues (only processes supported file types)
+- **Missing pgsrip/Tesseract**: Shows warning when `--convert-to srt` is used; image-based subs left as `.sup`
+- **Image-based subs with `--convert-to ass`**: Warning logged, subtitle left in native format (OCR to ASS is not supported)
 - **Invalid directory**: Exits with error message
 - **Corrupted video files**: Logs error and continues with other files
 - **Permission issues**: Logs error and continues with other files
