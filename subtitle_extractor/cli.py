@@ -114,6 +114,14 @@ Config file: create ~/.subtitle-extractor.yaml with default settings.
     parser.add_argument("--list-tracks", action="store_true",
                         help="List all subtitle tracks without extracting (inspection mode)")
 
+    # ---- sync detection ----
+    parser.add_argument("--check-sync", action="store_true",
+                        help="After extraction, report subtitle timing offset (non-destructive)")
+    parser.add_argument("--fix-sync", action="store_true",
+                        help="After extraction, detect and apply subtitle timing correction")
+    parser.add_argument("--sync-threshold", type=float, default=0.5, metavar="N",
+                        help="Minimum offset in seconds to report/fix (default: 0.5)")
+
     # ---- verbosity ----
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument("-v", "--verbose", action="store_true",
@@ -173,6 +181,13 @@ Config file: create ~/.subtitle-extractor.yaml with default settings.
     )
     preserve_structure = args.preserve_structure or config.get("preserve_structure", False)
     convert_to = args.convert_to or config.get("convert_to")
+    check_sync = args.check_sync or config.get("check_sync", False)
+    fix_sync = args.fix_sync or config.get("fix_sync", False)
+    sync_threshold = (
+        args.sync_threshold
+        if args.sync_threshold != parser.get_default("sync_threshold")
+        else config.get("sync_threshold", 0.5)
+    )
 
     # ------------------------------------------------------------------
     # Tool availability checks
@@ -201,6 +216,15 @@ Config file: create ~/.subtitle-extractor.yaml with default settings.
             file=sys.stderr,
         )
 
+    if check_sync or fix_sync:
+        from . import sync as sync_module  # noqa: PLC0415
+        if not sync_module.HAS_FFSUBSYNC:
+            print(
+                "Warning: ffsubsync not installed — sync detection unavailable.\n"
+                "Install with: pip install ffsubsync",
+                file=sys.stderr,
+            )
+
     # ------------------------------------------------------------------
     # Create extractor instance
     # ------------------------------------------------------------------
@@ -220,6 +244,9 @@ Config file: create ~/.subtitle-extractor.yaml with default settings.
         preserve_structure=preserve_structure,
         resume=args.resume,
         retries=retries,
+        check_sync=check_sync,
+        fix_sync=fix_sync,
+        sync_threshold=sync_threshold,
     )
 
     logging.info(f"Extracting subtitles for: {', '.join(extractor.target_languages)}\n")

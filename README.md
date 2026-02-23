@@ -32,6 +32,7 @@ A Python package that recursively extracts subtitles from MKV, MP4, WebM, MOV, a
 - **Sidecar .sup OCR**: Automatically detect and OCR standalone `.sup` files alongside video files
 - **Output Directory Control**: Extract to separate directory with optional structure preservation
 - **Resume Capability**: Continue from where you left off if interrupted; clear resume state with `--clear-resume`
+- **Subtitle Sync Detection**: Detect and fix subtitle timing offsets using Voice Activity Detection (`--check-sync` / `--fix-sync`)
 
 ## Requirements
 
@@ -40,6 +41,7 @@ A Python package that recursively extracts subtitles from MKV, MP4, WebM, MOV, a
 - **For MP4, WebM, MOV, AVI files**: ffmpeg (`ffmpeg` and `ffprobe`)
 - **For enhanced progress bars** *(optional)*: `rich` (Python package)
 - **For image-based subtitle OCR** *(optional)*: `pgsrip` (Python package) + `tesseract-ocr`
+- **For subtitle sync detection** *(optional)*: `ffsubsync` (Python package)
 
 **Note:** You need at least one of mkvtoolnix or ffmpeg installed. If you only have mkvtoolnix, the script will only process MKV files. If you only have ffmpeg, it will process MP4, WebM, MOV, and AVI files. The OCR tools are only required when converting PGS/dvdsub image subtitles to SRT.
 
@@ -138,11 +140,13 @@ Optional dependencies:
 pip install pyyaml          # YAML config file support
 pip install rich            # enhanced progress bars
 pip install pgsrip          # image-based subtitle OCR (also needs tesseract)
+pip install ffsubsync       # subtitle sync detection
 ```
 
-Or install all optional extras at once:
+Or install dependency groups:
 ```bash
-pip install -e ".[all]"
+pip install -e ".[sync]"    # sync detection only
+pip install -e ".[all]"     # everything
 ```
 
 ### Alternative: run directly
@@ -299,6 +303,58 @@ If extraction is interrupted, resume from where you left off:
 python extract_subs.py /path/to/videos --resume
 ```
 
+### Subtitle Sync Detection
+
+> **Requires:** `pip install ffsubsync`
+
+Subtitles embedded in video files can sometimes have timing offsets — every
+line is a few seconds early or late. The sync detection feature uses Voice
+Activity Detection (VAD) to compare when speech occurs in the audio against
+when subtitles appear, then reports (and optionally corrects) the offset.
+
+Works for translated subtitles too — it matches *when* speech happens, not
+*what* is said, so no internet connection or API key is needed.
+
+**Check sync (non-destructive):**
+```bash
+subtitle-extractor /path/to/videos --check-sync
+```
+Reports the detected offset and confidence after each subtitle is extracted:
+```
+  Extracted: S01E01.en.srt
+  Sync check: offset +2.34s (confidence 90%) ← subtitles are late
+
+  Extracted: S01E02.en.srt
+  Sync check: in sync (offset 0.08s, confidence 90%)
+```
+
+**Fix sync (rewrites the SRT):**
+```bash
+subtitle-extractor /path/to/videos --fix-sync
+```
+Applies the correction automatically when the offset exceeds the threshold:
+```
+  Extracted: S01E01.en.srt
+  Sync check: offset +2.34s (confidence 90%) ← subtitles are late
+  Sync: fixed ✓
+```
+
+**Adjust the minimum offset to report/fix:**
+```bash
+subtitle-extractor /path/to/videos --fix-sync --sync-threshold 1.0
+```
+Only fixes offsets larger than 1 second (default: 0.5 s).
+
+**Dry-run aware:**
+```bash
+subtitle-extractor /path/to/videos --fix-sync --dry-run
+```
+Reports what would be fixed without modifying any files.
+
+**Note:** Image-based subtitles (`.sup`) are skipped — they contain bitmap
+images rather than text timestamps, so timing shifts are not applicable.
+Install ffsubsync with: `pip install -e ".[sync]"`
+
 ### Configuration File
 Create `~/.subtitle-extractor.yaml` (or `.subtitle-extractor.yaml` in the current directory) with default settings:
 ```yaml
@@ -312,6 +368,9 @@ retries: 1                    # retry failed extractions once
 output_dir: /path/to/subtitles
 preserve_structure: true
 # convert_to: srt
+# check_sync: false           # report timing offset after extraction
+# fix_sync: false             # auto-correct timing offset (requires ffsubsync)
+# sync_threshold: 0.5         # minimum offset in seconds to report/fix
 ```
 
 Invalid keys, wrong types, or out-of-range values (e.g. `threads: 0`) are caught immediately with a clear error message.

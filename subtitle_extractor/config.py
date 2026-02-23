@@ -17,10 +17,17 @@ _VALID_KEYS: Dict[str, type] = {
     "overwrite": bool,
     "dry_run": bool,
     "threads": int,
+    "retries": int,
     "output_dir": str,
     "preserve_structure": bool,
     "convert_to": str,
+    "check_sync": bool,
+    "fix_sync": bool,
+    "sync_threshold": float,
 }
+
+# Keys that accept both int and float values (e.g. `sync_threshold: 1` in YAML).
+_NUMERIC_KEYS: frozenset = frozenset({"sync_threshold"})
 
 _CONVERT_TO_VALUES = {"srt", "ass"}
 
@@ -41,7 +48,13 @@ def validate_config(config: Dict[str, Any]) -> None:
             continue
 
         expected = _VALID_KEYS[key]
-        if not isinstance(value, expected):
+        # Numeric keys accept both int and float (e.g. `sync_threshold: 1` in YAML).
+        if key in _NUMERIC_KEYS:
+            if not isinstance(value, (int, float)):
+                errors.append(
+                    f"'{key}' must be a number, got {type(value).__name__}"
+                )
+        elif not isinstance(value, expected):
             errors.append(
                 f"'{key}' must be {expected.__name__}, got {type(value).__name__}"
             )
@@ -64,6 +77,10 @@ def validate_config(config: Dict[str, Any]) -> None:
             errors.append(
                 f"'output_dir' exists but is not a directory: {output_dir}"
             )
+
+    sync_threshold = config.get("sync_threshold")
+    if isinstance(sync_threshold, (int, float)) and sync_threshold < 0:
+        errors.append(f"'sync_threshold' must be >= 0, got {sync_threshold}")
 
     if errors:
         print("Configuration error(s):", file=sys.stderr)

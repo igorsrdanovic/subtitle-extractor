@@ -6,6 +6,9 @@ rich>=13.0        # Progress bars and formatted track tables
 # pgsrip          # pip install pgsrip
 # Also requires system package: apt install tesseract-ocr
 
+# For subtitle sync detection (--check-sync / --fix-sync)
+# ffsubsync>=0.4  # pip install ffsubsync
+
 # Development / testing
 pytest>=7.0
 pytest-cov

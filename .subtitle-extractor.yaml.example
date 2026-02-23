@@ -26,3 +26,8 @@ preserve_structure: false
 
 # Convert all subtitles to specific format (srt or ass)
 # convert_to: srt
+
+# Subtitle sync detection (requires: pip install ffsubsync)
+# check_sync: false       # report timing offset after each extraction (non-destructive)
+# fix_sync: false         # detect and apply timing correction (rewrites SRT timestamps)
+# sync_threshold: 0.5     # minimum offset in seconds to report/fix (default: 0.5)
