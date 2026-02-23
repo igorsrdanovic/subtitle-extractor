@@ -15,6 +15,9 @@ dry_run: false
 # Number of parallel threads (1 = sequential)
 threads: 1
 
+# Retry failed extractions up to N times (default: 0 = no retries)
+# retries: 1
+
 # Output directory for extracted subtitles
 # output_dir: /path/to/subtitles
 

@@ -1,0 +1,11 @@
+# Optional but highly recommended
+pyyaml>=6.0       # YAML config file support
+rich>=13.0        # Progress bars and formatted track tables
+
+# For image-based subtitle OCR (PGS/dvdsub → SRT)
+# pgsrip          # pip install pgsrip
+# Also requires system package: apt install tesseract-ocr
+
+# Development / testing
+pytest>=7.0
+pytest-cov
