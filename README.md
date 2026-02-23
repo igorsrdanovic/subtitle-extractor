@@ -1,6 +1,6 @@
 # Video Subtitle Extractor
 
-A Python script that recursively extracts subtitles from MKV, MP4, WebM, MOV, and AVI files in multiple languages and saves them in the same directory as the source files.
+A Python package that recursively extracts subtitles from MKV, MP4, WebM, MOV, and AVI files in multiple languages and saves them in the same directory as the source files.
 
 ## Features
 
@@ -22,18 +22,20 @@ A Python script that recursively extracts subtitles from MKV, MP4, WebM, MOV, an
 ### Advanced Features
 - **Dry-Run Mode**: Preview what would be extracted without making changes
 - **Parallel Processing**: Extract from multiple files simultaneously (multi-threading)
+- **Retry Logic**: Automatically retry failed extractions with configurable backoff (`--retries`)
 - **Configuration File**: Save default settings in `.subtitle-extractor.yaml`
+- **Config Validation**: Clear error messages for invalid configuration keys or values
 - **Advanced Filtering**: Filter by forced/SDH/commentary tracks and track titles
-- **Logging & Reports**: Save detailed logs and generate JSON/CSV reports
+- **Logging & Reports**: Save detailed logs and generate JSON/CSV reports; control verbosity with `--verbose`/`--quiet`
 - **Subtitle Conversion**: Convert text-based subtitles to SRT or ASS format
 - **Image-based Subtitle OCR**: Convert PGS/dvdsub (`.sup`) image subtitles to SRT using `pgsrip` + Tesseract
 - **Sidecar .sup OCR**: Automatically detect and OCR standalone `.sup` files alongside video files
 - **Output Directory Control**: Extract to separate directory with optional structure preservation
-- **Resume Capability**: Continue from where you left off if interrupted
+- **Resume Capability**: Continue from where you left off if interrupted; clear resume state with `--clear-resume`
 
 ## Requirements
 
-- Python 3.6 or higher
+- Python 3.8 or higher
 - **For MKV files**: mkvtoolnix (`mkvmerge` and `mkvextract`)
 - **For MP4, WebM, MOV, AVI files**: ffmpeg (`ffmpeg` and `ffprobe`)
 - **For enhanced progress bars** *(optional)*: `rich` (Python package)
@@ -121,10 +123,34 @@ pip install pgsrip
 
 ## Installation
 
-1. Clone or download this repository
-2. Make the script executable (Linux/macOS):
+### Recommended: install as a package
+
 ```bash
-chmod +x extract_subs.py
+git clone https://github.com/igorsrdanovic/subtitle-extractor.git
+cd subtitle-extractor
+pip install -e .
+```
+
+This installs the `subtitle-extractor` command globally and makes `python -m subtitle_extractor` available.
+
+Optional dependencies:
+```bash
+pip install pyyaml          # YAML config file support
+pip install rich            # enhanced progress bars
+pip install pgsrip          # image-based subtitle OCR (also needs tesseract)
+```
+
+Or install all optional extras at once:
+```bash
+pip install -e ".[all]"
+```
+
+### Alternative: run directly
+
+```bash
+git clone https://github.com/igorsrdanovic/subtitle-extractor.git
+cd subtitle-extractor
+python extract_subs.py /path/to/videos   # backward-compatible shim
 ```
 
 ## Usage
@@ -133,12 +159,11 @@ chmod +x extract_subs.py
 
 Extract English subtitles (default):
 ```bash
+subtitle-extractor /path/to/tv/shows
+# or
+python -m subtitle_extractor /path/to/tv/shows
+# or (backward-compat)
 python extract_subs.py /path/to/tv/shows
-```
-
-Or if made executable:
-```bash
-./extract_subs.py /path/to/tv/shows
 ```
 
 ### Extract Specific Languages
@@ -275,20 +300,25 @@ python extract_subs.py /path/to/videos --resume
 ```
 
 ### Configuration File
-Create `~/.subtitle-extractor.yaml` with default settings:
+Create `~/.subtitle-extractor.yaml` (or `.subtitle-extractor.yaml` in the current directory) with default settings:
 ```yaml
 languages:
   - en
   - es
 overwrite: false
+dry_run: false
 threads: 4
+retries: 1                    # retry failed extractions once
 output_dir: /path/to/subtitles
 preserve_structure: true
+# convert_to: srt
 ```
+
+Invalid keys, wrong types, or out-of-range values (e.g. `threads: 0`) are caught immediately with a clear error message.
 
 Then run without specifying options:
 ```bash
-python extract_subs.py /path/to/videos
+subtitle-extractor /path/to/videos
 ```
 
 ### Combined Example
@@ -436,7 +466,8 @@ The script handles various error scenarios:
 
 ```
 positional arguments:
-  directory                         Directory containing video files (will search recursively)
+  directory                         Directory containing video files (searched recursively).
+                                    Optional when using --clear-resume.
 
 optional arguments:
   -h, --help                        Show help message and exit
@@ -445,50 +476,65 @@ optional arguments:
   --overwrite                       Force re-extraction even if subtitle files exist
   --dry-run                         Preview without making changes
   --threads N                       Number of parallel threads (default: 1)
+  --retries N                       Retry failed extractions up to N times (default: 0)
   --include-forced                  Include forced subtitles
   --include-sdh                     Include SDH/hearing impaired subtitles
   --exclude-commentary              Exclude commentary tracks
   --track-title TITLE               Filter by track title (substring match)
-  --log-file FILE                   Save log to file
+  --list-tracks                     List all subtitle tracks without extracting
+  --log-file FILE                   Save log to file (also written to stderr)
   --report-format {json,csv}        Generate extraction report
   --convert-to {srt,ass}            Convert all subtitles to format
   --output-dir DIR                  Extract to specified directory
   --preserve-structure              Preserve directory structure in output
   --resume                          Resume from previous run
+  --clear-resume                    Delete the resume state file and exit
+  -v, --verbose                     Enable debug-level output
+  -q, --quiet                       Show warnings and errors only
 ```
 
 ### Quick Reference
 
 ```bash
 # Default (English only)
-python extract_subs.py /path/to/videos
+subtitle-extractor /path/to/videos
 
 # Single language
-python extract_subs.py /path/to/videos --languages es
+subtitle-extractor /path/to/videos --languages es
 
 # Multiple languages
-python extract_subs.py /path/to/videos --languages en es fr de
+subtitle-extractor /path/to/videos --languages en es fr de
 
 # Short form
-python extract_subs.py /path/to/videos -l en fr
+subtitle-extractor /path/to/videos -l en fr
 
 # With overwrite
-python extract_subs.py /path/to/videos -l en es --overwrite
+subtitle-extractor /path/to/videos -l en es --overwrite
 
 # Dry-run (preview)
-python extract_subs.py /path/to/videos --dry-run
+subtitle-extractor /path/to/videos --dry-run
 
-# Fast parallel processing
-python extract_subs.py /path/to/videos --threads 4
+# Verbose / quiet output
+subtitle-extractor /path/to/videos --verbose
+subtitle-extractor /path/to/videos --quiet
+
+# Fast parallel processing with retries
+subtitle-extractor /path/to/videos --threads 4 --retries 2
+
+# Inspect tracks before extracting
+subtitle-extractor /path/to/videos --list-tracks
 
 # Extract to separate directory
-python extract_subs.py /path/to/videos --output-dir /path/to/subs
+subtitle-extractor /path/to/videos --output-dir /path/to/subs
 
 # Convert all to SRT
-python extract_subs.py /path/to/videos --convert-to srt
+subtitle-extractor /path/to/videos --convert-to srt
 
 # Resume interrupted run
-python extract_subs.py /path/to/videos --resume
+subtitle-extractor /path/to/videos --resume
+
+# Clear resume state
+subtitle-extractor --clear-resume
 ```
 
 ## License
