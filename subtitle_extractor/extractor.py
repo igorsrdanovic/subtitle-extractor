@@ -107,6 +107,9 @@ class SubtitleExtractor:
         resume: bool = False,
         resume_file: Optional[Path] = None,
         retries: int = 0,
+        check_sync: bool = False,
+        fix_sync: bool = False,
+        sync_threshold: float = 0.5,
     ) -> None:
         self.overwrite = overwrite
         self.dry_run = dry_run
@@ -123,6 +126,9 @@ class SubtitleExtractor:
         self.resume = resume
         self.resume_file = resume_file or Path.home() / ".subtitle-extractor-resume.pkl"
         self.retries = max(0, retries)
+        self.check_sync = check_sync
+        self.fix_sync = fix_sync
+        self.sync_threshold = max(0.0, float(sync_threshold))
 
         # Normalise and store target languages (default to English).
         self.target_languages: List[str] = self._normalize_languages(
@@ -134,6 +140,7 @@ class SubtitleExtractor:
             "extracted": 0,
             "skipped": 0,
             "errors": 0,
+            "sync_issues": 0,
         }
 
         self.total_files: int = 0
@@ -613,6 +620,78 @@ class SubtitleExtractor:
         return False
 
     # ------------------------------------------------------------------
+    # Sync detection
+    # ------------------------------------------------------------------
+
+    def _run_sync_check(
+        self, video_file: Path, subtitle_file: Path
+    ) -> Optional[Tuple[float, float]]:
+        """Check (and optionally fix) subtitle timing relative to *video_file*.
+
+        Skips image-based subtitles (``.sup`` / ``.sub``) since they have no
+        text timestamps that can be shifted.
+
+        Returns ``(offset_seconds, confidence)`` or ``None`` when the check
+        cannot run (image subtitle, ffsubsync not installed, or error).
+        """
+        # Image-based subtitles have no text timestamps to shift.
+        if subtitle_file.suffix.lower() in (".sup", ".sub"):
+            return None
+
+        # Lazy import keeps module startup fast when ffsubsync is absent.
+        from . import sync as sync_module  # noqa: PLC0415
+
+        if not sync_module.HAS_FFSUBSYNC:
+            return None
+
+        try:
+            offset, confidence = sync_module.check_sync(video_file, subtitle_file)
+        except Exception as exc:
+            logging.debug(f"Sync check error: {exc}")
+            return (0.0, 0.0)
+
+        # ------------------------------------------------------------------
+        # Log the result
+        # ------------------------------------------------------------------
+        if confidence < 0.3:
+            logging.info(
+                f"  Sync check: low confidence ({confidence:.0%}) — "
+                "audio may be music-only or silent"
+            )
+        elif abs(offset) < self.sync_threshold:
+            logging.info(
+                f"  Sync check: in sync (offset {offset:+.2f}s, confidence {confidence:.0%})"
+            )
+        else:
+            direction = "subtitles are late" if offset > 0 else "subtitles are early"
+            logging.info(
+                f"  Sync check: offset {offset:+.2f}s (confidence {confidence:.0%})"
+                f" \u2190 {direction}"
+            )
+            with self._lock:
+                self.stats["sync_issues"] += 1
+
+        # ------------------------------------------------------------------
+        # Apply fix when requested and conditions are met
+        # ------------------------------------------------------------------
+        if (
+            self.fix_sync
+            and confidence >= 0.3
+            and abs(offset) >= self.sync_threshold
+        ):
+            if self.dry_run:
+                logging.info(
+                    f"  [DRY-RUN] Would fix sync: {subtitle_file.name} offset {offset:+.2f}s"
+                )
+            else:
+                if sync_module.fix_sync(video_file, subtitle_file):
+                    logging.info("  Sync: fixed \u2713")
+                else:
+                    logging.warning(f"  Sync: fix failed for {subtitle_file.name}")
+
+        return offset, confidence
+
+    # ------------------------------------------------------------------
     # Single-file processing
     # ------------------------------------------------------------------
 
@@ -685,9 +764,12 @@ class SubtitleExtractor:
                 if self.dry_run:
                     suffix = f" ({track['track_name']})" if track["track_name"] else ""
                     logging.info(f"  [DRY-RUN] Would extract: {output_file.name}{suffix}")
-                    result["subtitles"].append(
-                        {"output": str(output_file), "language": lang, "dry_run": True}
-                    )
+                    sub_entry: Dict = {
+                        "output": str(output_file), "language": lang, "dry_run": True
+                    }
+                    if self.check_sync or self.fix_sync:
+                        logging.info(f"  [DRY-RUN] Would check sync: {output_file.name}")
+                    result["subtitles"].append(sub_entry)
                     extracted_count += 1
                     continue
 
@@ -703,7 +785,18 @@ class SubtitleExtractor:
 
                     suffix = f" ({track['track_name']})" if track["track_name"] else ""
                     logging.info(f"  Extracted: {output_file.name}{suffix}")
-                    result["subtitles"].append({"output": str(output_file), "language": lang})
+
+                    sub_entry = {"output": str(output_file), "language": lang}
+
+                    # Run sync check/fix for text-based subtitles.
+                    if (self.check_sync or self.fix_sync) and \
+                            output_file.suffix.lower() not in (".sup", ".sub"):
+                        sync_result = self._run_sync_check(video_file, output_file)
+                        if sync_result is not None:
+                            sub_entry["sync_offset"] = sync_result[0]
+                            sub_entry["sync_confidence"] = sync_result[1]
+
+                    result["subtitles"].append(sub_entry)
                     extracted_count += 1
                     with self._lock:
                         self.stats["extracted"] += 1
@@ -967,6 +1060,13 @@ class SubtitleExtractor:
         logging.info("=" * 50)
         logging.info(f"Files processed:      {self.stats['processed']}")
         logging.info(f"Subtitles extracted:  {self.stats['extracted']}")
+        if self.check_sync or self.fix_sync:
+            hint = (
+                "  (use --fix-sync to correct)"
+                if not self.fix_sync and self.stats["sync_issues"] > 0
+                else ""
+            )
+            logging.info(f"Sync issues found:    {self.stats['sync_issues']}{hint}")
         logging.info(f"Files skipped:        {self.stats['skipped']}")
         logging.info(f"Errors encountered:   {self.stats['errors']}")
 
